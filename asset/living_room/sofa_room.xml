@@ -1,0 +1,34 @@
+<mujoco model="sofa room">
+    
+    <!-- Default options -->
+    <compiler angle="radian" assetdir="./mesh" autolimits="true" />
+    <option integrator="RK4" noslip_iterations="20" />
+    <default>
+        <joint armature="0.1" damping="0.1" />
+        <default class="visual_only">
+            <geom type="mesh" contype="0" conaffinity="0" group="2" />
+        </default>
+        <default class="no_visual_collision">
+            <!-- visual group of 'collision' should be 3 to not render -->
+            <geom type="capsule" solimp=".9 .99 .001" solref=".015 1" group="3" />
+        </default>
+        <default class="visual_collision">
+            <geom type="mesh" solimp=".9 .99 .001" solref=".015 1" group="2" />
+        </default>
+    </default>
+    
+    <!-- Sky and floor -->
+    <include file="./floor2.xml" />
+
+    <!-- Sofa -->
+    <include file="./object/obj_sofa.xml" />
+
+    <!-- Woman -->
+    <include file="./object/obj_woman.xml" />
+
+    <!-- Kobuki -->
+    <include file="./object/kobuki_standalone.xml" />
+
+    <!-- D435i -->
+    <!-- <include file="./object/d435i.xml" /> -->
+</mujoco>

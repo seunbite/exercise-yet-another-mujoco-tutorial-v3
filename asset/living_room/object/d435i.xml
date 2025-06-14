@@ -1,0 +1,39 @@
+<mujoco model="d435i">
+
+  <asset>
+    <material name="Black_Acrylic" rgba="0.070360 0.070360 0.070360 1"/>
+    <material name="Cameras_Gray" rgba="0.296138 0.296138 0.296138 1"/>
+    <material name="IR_Emitter_Lens" rgba="0.287440 0.665387 0.327778 1"/>
+    <material name="IR_Lens" rgba="0.035601 0.035601 0.035601 1"/>
+    <material name="IR_Rim" rgba="0.799102 0.806952 0.799103 1"/>
+    <material name="Metal_Casing" rgba="1 1 1 1"/>
+    <material name="RGB_Pupil" rgba="0.087140 0.002866 0.009346 1"/>
+
+    <mesh file="d435i_0.obj" scale="200 200 200"/>
+    <mesh file="d435i_1.obj" scale="200 200 200"/>
+    <mesh file="d435i_2.obj" scale="200 200 200"/>
+    <mesh file="d435i_3.obj" scale="200 200 200"/>
+    <mesh file="d435i_4.obj" scale="200 200 200"/>
+    <mesh file="d435i_5.obj" scale="200 200 200"/>
+    <mesh file="d435i_6.obj" scale="200 200 200"/>
+    <mesh file="d435i_7.obj" scale="200 200 200"/>
+    <mesh file="d435i_8.obj" scale="200 200 200"/>
+    <texture type="2d" name="d435i_color" file="d435i.png"/>
+    <material name="d435i_material" texture="d435i_color" specular="0.5" shininess="0.25"/>
+  </asset>
+
+  <worldbody>
+    <body pos="1000 1000 0">
+      <geom mesh="d435i_0" material="IR_Lens" class="visual_collision"/>
+      <geom mesh="d435i_1" material="IR_Emitter_Lens" class="visual_collision"/>
+      <geom mesh="d435i_2" material="IR_Rim" class="visual_collision"/>
+      <geom mesh="d435i_3" material="IR_Lens" class="visual_collision"/>
+      <geom mesh="d435i_4" material="Cameras_Gray" class="visual_collision"/>
+      <geom mesh="d435i_5" material="Black_Acrylic" class="visual_collision"/>
+      <geom mesh="d435i_6" material="Black_Acrylic" class="visual_collision"/>
+      <geom mesh="d435i_7" material="RGB_Pupil" class="visual_collision"/>
+      <geom mesh="d435i_8" mass="0.072" material="Metal_Casing" class="visual_collision"/>
+      <geom class="no_visual_collision" type="capsule" mesh="d435i_8"/>
+    </body>
+  </worldbody>
+</mujoco>

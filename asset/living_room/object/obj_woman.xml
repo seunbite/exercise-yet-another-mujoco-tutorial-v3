@@ -1,0 +1,41 @@
+<mujoco model="obj_woman">
+  <asset>
+    <texture type="2d" name="Material" file="Material_woman.png"/>
+    <material name="Material_001" texture="Material" specular="0.5" shininess="0.254163467"/>
+    <mesh name="woman" file="woman.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_0" file="woman_collision_0.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_1" file="woman_collision_1.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_2" file="woman_collision_2.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_3" file="woman_collision_3.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_4" file="woman_collision_4.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_5" file="woman_collision_5.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_6" file="woman_collision_6.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_7" file="woman_collision_7.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_8" file="woman_collision_8.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_9" file="woman_collision_9.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_10" file="woman_collision_10.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_11" file="woman_collision_11.obj" scale="2 2 2"/>
+    <mesh name="woman_collision_12" file="woman_collision_12.obj" scale="2 2 2"/>
+  </asset>
+  <worldbody>
+    <body name="obj_woman" pos="500 500 0" euler="-1.5708 0 3.1416">
+      <body pos="0 0 0" euler="0 0 0">
+      <geom type="mesh" material="Material_001" mesh="woman" class="visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_0" rgba="0.9703739678792183 0.7254278357973145 0.8348079120113429 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_1" rgba="0.3807303652255186 0.9515270826746987 0.794161691872197 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_2" rgba="0.7357771592020599 0.03197571585623682 0.7573347762376297 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_3" rgba="0.22437687066751355 0.8983854312447426 0.8072830142415056 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_4" rgba="0.4259443230549246 0.255142076297744 0.5117899209305925 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_5" rgba="0.89605941854049 0.15930300496169636 0.9281048140887879 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_6" rgba="0.38701806192487753 0.21378089272244027 0.42270838718349524 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_7" rgba="0.7269915071245169 0.30545153151295323 0.2712205302887507 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_8" rgba="0.36097021646440397 0.09440362286679216 0.6984026506939116 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_9" rgba="0.5145967546201126 0.819960450705384 0.38701052466341046 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_10" rgba="0.9164561001345739 0.47247165590670337 0.7899164253637053 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_11" rgba="0.7604545192192328 0.14946620264242283 0.6369340586772098 1" class="no_visual_collision"/>
+      <geom type="mesh" mesh="woman_collision_12" rgba="0.24222888771814854 0.3995985577069854 0.1407152957497514 1" class="no_visual_collision"/>
+      <inertial pos="0 0 0" mass="20.0" diaginertia="1.0 1.0 1.0" />
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

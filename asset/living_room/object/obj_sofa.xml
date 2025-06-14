@@ -1,0 +1,71 @@
+<mujoco model="obj_sofa">
+  <asset>
+    <texture type="2d" name="SOFA_baseColor" file="SOFA_baseColor.png"/>
+    <material name="SOFA" texture="SOFA_baseColor" specular="0.5" shininess="0.25"/>
+    <texture type="2d" name="TABLE_baseColor" file="TABLE_baseColor.png"/>
+    <material name="TABLE" texture="TABLE_baseColor" specular="0.5" shininess="0.25"/>
+    <mesh name="sofa_0" file="sofa_0.obj"/>
+    <mesh name="sofa_1" file="sofa_1.obj"/>
+    <mesh name="sofa_collision_0" file="sofa_collision_0.obj"/>
+    <mesh name="sofa_collision_1" file="sofa_collision_1.obj"/>
+    <mesh name="sofa_collision_2" file="sofa_collision_2.obj"/>
+    <mesh name="sofa_collision_3" file="sofa_collision_3.obj"/>
+    <mesh name="sofa_collision_4" file="sofa_collision_4.obj"/>
+    <mesh name="sofa_collision_5" file="sofa_collision_5.obj"/>
+    <mesh name="sofa_collision_6" file="sofa_collision_6.obj"/>
+    <mesh name="sofa_collision_7" file="sofa_collision_7.obj"/>
+    <mesh name="sofa_collision_8" file="sofa_collision_8.obj"/>
+    <mesh name="sofa_collision_9" file="sofa_collision_9.obj"/>
+    <mesh name="sofa_collision_10" file="sofa_collision_10.obj"/>
+    <mesh name="sofa_collision_11" file="sofa_collision_11.obj"/>
+    <mesh name="sofa_collision_12" file="sofa_collision_12.obj"/>
+    <mesh name="sofa_collision_13" file="sofa_collision_13.obj"/>
+    <mesh name="sofa_collision_14" file="sofa_collision_14.obj"/>
+    <mesh name="sofa_collision_15" file="sofa_collision_15.obj"/>
+    <mesh name="sofa_collision_16" file="sofa_collision_16.obj"/>
+    <mesh name="sofa_collision_17" file="sofa_collision_17.obj"/>
+    <mesh name="sofa_collision_18" file="sofa_collision_18.obj"/>
+    <mesh name="sofa_collision_19" file="sofa_collision_19.obj"/>
+    <mesh name="sofa_collision_20" file="sofa_collision_20.obj"/>
+    <mesh name="sofa_collision_21" file="sofa_collision_21.obj"/>
+    <mesh name="sofa_collision_22" file="sofa_collision_22.obj"/>
+    <mesh name="sofa_collision_23" file="sofa_collision_23.obj"/>
+    <mesh name="sofa_collision_24" file="sofa_collision_24.obj"/>
+    <mesh name="sofa_collision_25" file="sofa_collision_25.obj"/>
+  </asset>
+  <worldbody>
+    <body name="obj_sofa" pos="0 0 0.5" euler="-1.5708 0 3.1416">
+      <body pos="0 0 0" euler="0 0 0">
+        <geom type="mesh" mesh="sofa_0" material="TABLE" class="visual_collision"/>
+        <geom type="mesh" mesh="sofa_1" material="SOFA" class="visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_0" rgba="0.8657204775164123 0.03991006484250259 0.3890104150483542 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_1" rgba="0.505035028301866 0.4231926845013467 0.2659516045279863 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_2" rgba="0.5025503529327452 0.33656599990362834 0.04640286325317422 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_3" rgba="0.26588567630540205 0.2313461549531889 0.3224170824630984 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_4" rgba="0.35643599928550607 0.11418098375276309 0.7123364277464982 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_5" rgba="0.18121161885801385 0.8219381360669582 0.24150560635012253 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_6" rgba="0.2901632612779683 0.3670852983712839 0.050880070741631145 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_7" rgba="0.45069913327989775 0.598239278799391 0.05534966222203885 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_8" rgba="0.6802894401717876 0.18283113579318178 0.5489857555291446 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_9" rgba="0.9328924441427584 0.5510749164063016 0.5748512074828737 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_10" rgba="0.09078238984160036 0.8098104142810765 0.957710170084234 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_11" rgba="0.1699985368100353 0.4706982737363081 0.4880281532181905 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_12" rgba="0.6728873833952066 0.9551167373764008 0.16188072788824626 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_13" rgba="0.3699843938725156 0.16662100660348722 0.19558124279602596 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_14" rgba="0.5666720000722367 0.2385680132680995 0.4271955963532753 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_15" rgba="0.5967755310236643 0.4630587715143071 0.029936146341744796 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_16" rgba="0.9666284770529643 0.6021150870136235 0.03790124551595808 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_17" rgba="0.6765214108027087 0.6656381915272408 0.7541550951284364 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_18" rgba="0.8057149895435817 0.7907321189446995 0.4990564503869147 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_19" rgba="0.39944446012483237 0.5388416830092827 0.1487522540587819 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_20" rgba="0.47332956235402757 0.40035289912578753 0.24782864031585938 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_21" rgba="0.4833061479861417 0.34373277923650203 0.09519955261530266 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_22" rgba="0.4216358459579893 0.42299085334066355 0.15894685004901754 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_23" rgba="0.16678192528552427 0.5600358834382718 0.47818107339851024 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_24" rgba="0.9971527551597905 0.5044908652518028 0.4879497119355568 1" class="no_visual_collision"/>
+        <geom type="mesh" mesh="sofa_collision_25" rgba="0.34704076940128326 0.3467570762439447 0.06522334956499576 1" class="no_visual_collision"/>
+        <inertial pos="0 0 0" mass="100.0" diaginertia="10.0 10.0 10.0" />
+      </body>
+    </body>
+  </worldbody>
+</mujoco>
