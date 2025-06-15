@@ -88,3 +88,9 @@ WARNING: Nan, Inf or huge value in QACC at DOF 0. The simulation is unstable. Ti
 Sat Jun 14 22:04:39 2025
 WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/yet-another-mujoco-tutorial-v3/asset/realistic_tabletop/./floor2.xml'
 
+Sun Jun 15 17:04:22 2025
+WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/yet-another-mujoco-tutorial-v3/asset/makeup_frida/./floor2.xml'
+
+Sun Jun 15 17:05:16 2025
+WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/yet-another-mujoco-tutorial-v3/asset/makeup_frida/./floor_issac_style.xml'
+
