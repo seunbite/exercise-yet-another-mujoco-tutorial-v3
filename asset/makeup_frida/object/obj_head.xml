@@ -1,15 +1,13 @@
 <mujoco model="obj_head">
     <asset>
         <material name="head_mat" specular="0.5" shininess="0.5" rgba="0.8 0.8 0.8 1" />
-        <mesh name="head" file="head.obj" />
+        <mesh name="head" file="head.obj" scale="0.1 0.1 0.1" />
     </asset>
     <worldbody>
-        <body name="obj_head" pos="0 0 0">
-            <freejoint />
-            <body pos="0 0 0" euler="0 0 0">
-                <geom type="mesh" material="head_mat" mesh="head" class="visual_collision" />
-                <inertial pos="0 0 0" mass="0.3" diaginertia="0.1 0.1 0.1" />
-            </body>
+        <body name="obj_head" pos="0 0 0" euler="-1.7 -1.7 0">
+            <joint type="free" />
+            <geom type="mesh" material="head_mat" mesh="head" class="visual_collision" />
+        <inertial pos="0 0 0" mass="3" diaginertia="0.1 0.1 0.1" />
         </body>
     </worldbody>
 </mujoco>

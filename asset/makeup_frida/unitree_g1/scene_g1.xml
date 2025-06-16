@@ -1,9 +1,0 @@
-<mujoco model="snapbot scene">
-
-  <!-- UR5e -->
-  <include file="./g1.xml" />
-
-  <!-- Floor and Sky -->
-  <include file="./floor_isaac_style.xml" />
-
-</mujoco>

@@ -54,6 +54,7 @@
         <material name="jointgray" specular="0.5" shininess="0.25" rgba="0.278 0.278 0.278 1" />
         <material name="linkgray" specular="0.5" shininess="0.25" rgba="0.82 0.82 0.82 1" />
         <material name="urblue" specular="0.5" shininess="0.25" rgba="0.49 0.678 0.8 1" />
+        <material name="applicator_mat" specular="0.5" shininess="0.5" rgba="0.8 0.8 0.8 1" />
         <!-- UR5e mesh files -->
         <mesh file="base_0.obj" />
         <mesh file="base_1.obj" />
@@ -168,7 +169,7 @@
                                     <geom class="eef_collision" pos="0 0.08 0" quat="1 1 0 0"
                                         size="0.04 0.02" />
                                     <site name="attachment_site" pos="0 0.1 0" quat="-1 1 0 0" />
-
+                                    
                                     <body name="ur_tcp_link" pos="0. 0.27 0.">
                                         <geom size="0.005 0.005 0.005" pos="0 0. 0." contype="0"
                                             conaffinity="0"
@@ -219,6 +220,8 @@
                                             <geom type="mesh" contype="0" conaffinity="1"
                                                 rgba="0.5 0.5 0.5 1"
                                                 friction="0.8 0.8 0.8" mesh="rg2_gripper_base_link" />
+
+
 
                                             <!-- Camera center -->
                                             <body name="ur_camera_center" pos="0 -0.09 0.02">
@@ -313,6 +316,9 @@
                                                 <body name="ur_rg2_gripper_finger2_finger_tip_link"
                                                     pos="0.00084055833321731 0.01449 0.055"
                                                     quat="0 0 0 1">
+                                                    
+
+
                                                     <inertial pos="0.0168606 3.93808e-10 0.02267"
                                                         quat="0.949317 0 -0.314322 0"
                                                         mass="0.0110931"
@@ -323,11 +329,18 @@
                                                         rgba="0.5 0.5 0.5 1"
                                                         friction="0.8 0.8 0.8"
                                                         mesh="rg2_gripper_finger2_finger_tip_link" />
-                                                    <joint name="gripper_finger2_finger_tip_joint"
+                                                        <joint name="gripper_finger2_finger_tip_joint"
                                                         class="GRIPPER"
                                                         pos="0. 0. 0." axis="0 1 0" limited="true"
                                                         range="-2.5 2.5" />
                                                 </body>
+                                            </body>
+
+                                                                                            <!-- Keeping only this applicator -->
+                                            <body name="applicator" pos="0 -0.05 0.315" quat="0 0 0.7071068 0.7071068">
+                                                <geom type="cylinder" size="0.002 0.1" pos="0 0 0.05"
+                                                    euler="1.57 0 0" material="applicator_mat" class="visual_collision" />
+                                                <inertial pos="0 0 0" mass="0.001" diaginertia="0.000001 0.000001 0.000001" />
                                             </body>
 
                                         </body>

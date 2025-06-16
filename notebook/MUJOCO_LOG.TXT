@@ -94,3 +94,15 @@ WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/yet-anoth
 Sun Jun 15 17:05:16 2025
 WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/yet-another-mujoco-tutorial-v3/asset/makeup_frida/./floor_issac_style.xml'
 
+Sun Jun 15 17:42:23 2025
+WARNING: Nan, Inf or huge value in QACC at DOF 0. The simulation is unstable. Time = 0.0040.
+
+Sun Jun 15 20:09:25 2025
+WARNING: mju_openResource: unknown file '/mnt/d/workspace/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/asset/realistic_tabletop/scene_table.xml'
+
+Sun Jun 15 20:13:04 2025
+WARNING: mju_openResource: unknown file '/mnt/d/workspace/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/asset/tabletop_manipulation/scene_ur5e_cylinders.xml'
+
+Sun Jun 15 20:56:28 2025
+WARNING: mju_openResource: unknown file '/mnt/d/workspace/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/asset/tabletop_manipulation/scene_ur5e_cylinders.xml'
+

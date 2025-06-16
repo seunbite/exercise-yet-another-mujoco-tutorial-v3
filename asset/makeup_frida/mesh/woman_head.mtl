@@ -1,0 +1,104 @@
+# Blender 4.4.3 MTL File: 'None'
+# www.blender.org
+
+newmtl Eyelashes
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 2
+map_Kd Eyelashes_diffuse_scale7.png
+map_d Eyelashes_diffuse_scale7.png
+
+newmtl Eyelashes.002
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 2
+map_Kd Eyelashes_diffuse_scale7.png
+map_d Eyelashes_diffuse_scale7.png
+
+newmtl Hair
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ni 1.500000
+illum 2
+map_Kd Hair_diffuse_scale0.png
+map_Ke Hair_emissive_scale1.jpg
+map_d Hair_diffuse_scale0.png
+
+newmtl Hair.002
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ni 1.500000
+illum 2
+map_Kd Hair_diffuse_scale0.png
+map_Ke Hair_emissive_scale1.jpg
+map_d Hair_diffuse_scale0.png
+
+newmtl Head
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd Head_diffuse.jpg
+map_Bump -bm 1.000000 Head_normal_scale4_norm.jpg
+
+newmtl Head.002
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd Head_diffuse.jpg
+map_Bump -bm 1.000000 Head_normal_scale4_norm.jpg
+
+newmtl Mouth
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+
+newmtl Mouth.002
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+
+newmtl material
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd material_diffuse.jpg
+
+newmtl material.002
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd material_diffuse.jpg

@@ -1,0 +1,15 @@
+<mujoco model="obj_applicator">
+    <asset>
+        <material name="applicator_mat" specular="0.5" shininess="0.5" rgba="0.8 0.8 0.8 1" />
+    </asset>
+    <worldbody>
+        <body name="obj_applicator" pos="0.4 0.4 0.1" euler="0 0 0">
+            <joint type="free" />
+            <body pos="0 0 0" euler="0 0 0">
+                <!-- 막대의 본체 -->
+                <geom type="cylinder" size="0.002 0.1" pos="0 0 0.1" euler="1.57 0 0" material="applicator_mat" class="visual_collision" />
+                <inertial pos="0 0 0.1" mass="0.1" diaginertia="0.1 0.1 0.1" />
+            </body>
+        </body>
+    </worldbody>
+</mujoco> 
