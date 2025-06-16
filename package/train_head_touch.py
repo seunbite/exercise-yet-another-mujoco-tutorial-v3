@@ -1,136 +1,32 @@
-import sys,mujoco,time,os,json
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Normal
 import matplotlib.pyplot as plt
-sys.path.append('../package/helper/')
-sys.path.append('../package/mujoco_usage/')
-sys.path.append('../package/gpt_usage/')
-sys.path.append('../package/detection_module/')
 from mujoco_parser import *
-from utility import *
-from transformation import *
-from gpt_helper import *
-from owlv2 import *
+from gym.head_touch_env import HeadTouchGymClass
 
-# Environment class
-class HeadTouchEnv:
-    def __init__(self, env, HZ=50):
-        self.env = env
-        self.HZ = HZ
-        
-        # Initialize viewer first
-        self.env.init_viewer(
-            azimuth=170,
-            distance=2.3,
-            elevation=-35,
-            lookat=[0.01,0.1,-0.25],
-            transparent=True,
-            maxgeom=100000
-        )
-        
-        # Get image dimensions from a test observation
-        test_obs = self._get_observation()
-        self.o_dim = test_obs.shape[0]  # Flattened image size
-        self.a_dim = 7  # 6 joint angles + 1 gripper
-        
-        # Target dot position range (relative to head)
-        self.target_x_range = [-0.1, 0.1]
-        self.target_y_range = [-0.1, 0.1]
-        self.target_z_range = [0.05, 0.2]
-        
-        # Success threshold
-        self.success_threshold = 0.02  # 2cm
-        
-        print(f"[HeadTouch] Instantiated")
-        print(f"   [info] dt:[{1.0/self.HZ:.4f}] HZ:[{self.HZ}], state_dim:[{self.o_dim}], a_dim:[{self.a_dim}]")
-    
-    def _get_observation(self):
-        """Get current observation"""
-        p_cam, R_cam = self.env.get_pR_body('ur_camera_center')
-        p_ego = p_cam
-        p_trgt = p_cam + R_cam[:,2]
-        rgb_img, _, _, _, _ = self.env.get_egocentric_rgbd_pcd(
-            p_ego=p_ego,
-            p_trgt=p_trgt,
-            rsz_rate_for_img=1/8,
-            fovy=45
-        )
-        return rgb_img.flatten()
-    
-    def reset(self):
-        """Reset environment and get initial observation"""
-        self.env.reset()
-        
-        # Randomize target dot position
-        target_x = np.random.uniform(*self.target_x_range)
-        target_y = np.random.uniform(*self.target_y_range)
-        target_z = np.random.uniform(*self.target_z_range)
-        self.env.set_p_body('target_dot', np.array([target_x, target_y, target_z]))
-        
-        return self._get_observation()
-    
-    def step(self, action, max_time=5.0):
-        """Execute action and get next observation"""
-        # Apply action to robot joints
-        joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-                      'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
-        idxs_step = self.env.get_idxs_step(joint_names=joint_names)
-        self.env.step(ctrl=action, ctrl_idxs=idxs_step)
-        
-        # Get new observation
-        obs = self._get_observation()
-        
-        # Calculate reward
-        p_tip = self.env.get_p_body('applicator')  # Get applicator tip position
-        p_target = self.env.get_p_body('target_dot')  # Get target position
-        dist = np.linalg.norm(p_tip - p_target)
-        
-        # Reward is 1 if target is reached, -0.1 otherwise
-        reward = 1.0 if dist < self.success_threshold else -0.1
-        
-        # Episode is done if target is reached or max time exceeded
-        done = (dist < self.success_threshold) or (self.env.get_sim_time() > max_time)
-        
-        info = {
-            'dist': dist,
-            'p_tip': p_tip,
-            'p_target': p_target
-        }
-        
-        return obs, reward, done, info
-    
-    def render(self):
-        """Render the current state"""
-        self.env.render()
-
-# PPO implementation
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim):
         super(ActorCritic, self).__init__()
         
         # Actor network (policy)
         self.actor = nn.Sequential(
-            nn.Linear(state_dim, 1024),
+            nn.Linear(state_dim, 256),
             nn.ReLU(),
-            nn.Linear(1024, 512),
+            nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, action_dim * 2)  # Mean and log_std for each action
+            nn.Linear(128, action_dim * 2)  # Mean and log_std for each action
         )
         
         # Critic network (value function)
         self.critic = nn.Sequential(
-            nn.Linear(state_dim, 1024),
+            nn.Linear(state_dim, 256),
             nn.ReLU(),
-            nn.Linear(1024, 512),
+            nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1)
+            nn.Linear(128, 1)
         )
     
     def forward(self, state):
@@ -146,7 +42,7 @@ class ActorCritic(nn.Module):
         return mean, std, value
 
 class PPO:
-    def __init__(self, state_dim, action_dim, lr=1e-4, gamma=0.99, epsilon=0.2):
+    def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, epsilon=0.2):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.actor_critic = ActorCritic(state_dim, action_dim).to(self.device)
         self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=lr)
@@ -154,8 +50,7 @@ class PPO:
         self.epsilon = epsilon
         
     def select_action(self, state):
-        # Add batch dimension
-        state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        state = torch.FloatTensor(state).to(self.device)
         mean, std, _ = self.actor_critic(state)
         
         # Create normal distribution
@@ -167,7 +62,7 @@ class PPO:
         # Calculate log probability
         log_prob = dist.log_prob(action).sum(dim=-1)
         
-        return action.squeeze(0).cpu().numpy(), log_prob.squeeze(0).cpu().numpy()
+        return action.cpu().numpy(), log_prob.cpu().numpy()
     
     def update(self, states, actions, old_log_probs, rewards, next_states, dones):
         # Convert to tensors
@@ -214,16 +109,14 @@ class PPO:
             loss.backward()
             self.optimizer.step()
 
-def main():
-    # Initialize MuJoCo environment
+def train():
+    # Initialize environment
     env = MuJoCoParserClass(
         name='ur5e_rg2',
-        rel_xml_path='../asset/makeup_frida/scene_table.xml',
-        verbose=True
+        rel_xml_path='../asset/ur5e/ur5e_rg2.xml',
+        VERBOSE=True
     )
-    
-    # Initialize head touch environment
-    head_touch_env = HeadTouchEnv(env=env)
+    head_touch_env = HeadTouchGymClass(env=env)
     
     # Initialize PPO
     state_dim = head_touch_env.o_dim
@@ -233,7 +126,7 @@ def main():
     # Training parameters
     n_episodes = 1000
     max_steps = 200
-    batch_size = 32
+    batch_size = 64
     
     # Training loop
     episode_rewards = []
@@ -254,7 +147,7 @@ def main():
             action, log_prob = ppo.select_action(state)
             
             # Execute action
-            next_state, reward, done, info = head_touch_env.step(action)
+            next_state, reward, done, _ = head_touch_env.step(action)
             
             # Store transition
             states.append(state)
@@ -317,38 +210,6 @@ def main():
     # Save model
     torch.save(ppo.actor_critic.state_dict(), 'head_touch_model.pth')
     print("Training completed!")
-    
-    # Test the trained model
-    print("\nTesting trained model...")
-    model = ppo.actor_critic
-    model.eval()
-    
-    for episode in range(5):
-        state = head_touch_env.reset()
-        episode_reward = 0
-        done = False
-        
-        while not done:
-            # Get action from model
-            with torch.no_grad():
-                state_tensor = torch.FloatTensor(state).unsqueeze(0).to(ppo.device)
-                mean, std, _ = model(state_tensor)
-                action = mean.squeeze(0).cpu().numpy()
-            
-            # Execute action
-            next_state, reward, done, info = head_touch_env.step(action)
-            
-            # Update state and reward
-            state = next_state
-            episode_reward += reward
-            
-            # Print progress
-            print(f"Distance to target: {info['dist']:.3f}m")
-            
-            # Render
-            head_touch_env.render()
-        
-        print(f"Episode {episode + 1} finished with reward: {episode_reward:.2f}")
 
 if __name__ == "__main__":
-    main()
+    train()
