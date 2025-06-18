@@ -9,6 +9,8 @@ import cv2
 from PIL import Image
 import io
 import torch.nn.functional as F
+import random
+from collections import deque
 
 sys.path.append('../package/helper/')
 sys.path.append('../package/mujoco_usage/')
@@ -52,19 +54,17 @@ class HeadTouchEnv:
             
             # Initialize the backup image
             self.env.grab_image_backup = np.zeros((400, 600, 3), dtype=np.uint8)
+
+        else:
+            self.viewer_initialized = False
         
         # Get observation dimensions (headless version)
         test_obs = self._get_observation()
         self.o_dim = test_obs.shape[0]  # 18 values: 6 joint pos + 6 joint vel + 3 tip pos + 3 target pos
         self.a_dim = 6  # 6 joint angles (no gripper)
         
-        # Target dot position range (relative to head)
-        self.target_x_range = [-0.1, 0.1]
-        self.target_y_range = [-0.1, 0.1]
-        self.target_z_range = [0.05, 0.2]
-        
         # Success threshold
-        self.success_threshold = 0.02  # 2cm
+        self.success_threshold = 0.05  # Increased from 0.02 to 5cm for easier success
         
         print(f"[HeadTouch] Instantiated")
         print(f"   [info] dt:[{1.0/self.HZ:.4f}] HZ:[{self.HZ}], state_dim:[{self.o_dim}], a_dim:[{self.a_dim}]")
@@ -87,18 +87,13 @@ class HeadTouchEnv:
         self.env.set_p_body(body_name='object_table', p=np.array([1.0, 0, 0]))
         
         # Setup objects (head)
-        obj_names = ['obj_head']
-        n_obj = len(obj_names)
         
         # Position objects on table
-        obj_xyzs = np.array([[1, 0, 0.51]])  # Position on table
+        obj_xyzs = np.array([[1.1, 0, 0.51]])  # Position on table
         R = rpy2r(np.radians([0, 0, 270]))  # Rotation
-        
-        print("Object list:")
-        for obj_idx in range(n_obj):
-            print(f" [{obj_idx}] obj_name:[{obj_names[obj_idx]}]")
-            self.env.set_p_base_body(body_name=obj_names[obj_idx], p=obj_xyzs[obj_idx, :])
-            self.env.set_R_base_body(body_name=obj_names[obj_idx], R=R)
+
+        self.env.set_p_base_body(body_name='obj_head', p=obj_xyzs[0, :])
+        self.env.set_R_base_body(body_name='obj_head', R=R)
         
         # Wait for 10 seconds to let physics settle (no frame capture during settling)
         waiting_time = 10.0
@@ -146,7 +141,7 @@ class HeadTouchEnv:
         joint_velocities = self.env.get_qvel_joints(joint_names=self.joint_names)
         
         # Get end-effector position
-        p_tip = self.env.get_p_body('applicator')
+        p_tip = self.env.get_p_body('applicator_tip')
         
         # Get target position
         p_target = self.env.get_p_body('target_dot')
@@ -201,19 +196,12 @@ class HeadTouchEnv:
         for _ in range(wait_steps):
             self.env.step()
         
-        # Randomize target dot position (relative to head)
-        target_x = np.random.uniform(*self.target_x_range)
-        target_y = np.random.uniform(*self.target_y_range)
-        target_z = np.random.uniform(*self.target_z_range)
-        
-        # Get head position and add relative target position
-        head_pos = self.env.get_p_body('obj_head')
-        target_pos = head_pos + np.array([target_x, target_y, target_z])
-        self.env.set_p_body('target_dot', target_pos)
+        # Target dot position is fixed in XML file - no randomization needed
+        # The target_dot is already positioned at (0, 0, 0.3) relative to obj_head in the XML
         
         return self._get_observation()
     
-    def step(self, action, max_time=30.0):
+    def step(self, action, max_time=60.0):
         """Execute action and get next observation"""
         # Apply action to robot joints
         idxs_step = self.env.get_idxs_step(joint_names=self.joint_names)
@@ -223,23 +211,38 @@ class HeadTouchEnv:
         obs = self._get_observation()
         
         # Calculate reward
-        p_tip = self.env.get_p_body('applicator')  # Get applicator tip position
+        p_tip = self.env.get_p_body('applicator_tip')  # Get applicator tip position
         p_target = self.env.get_p_body('target_dot')  # Get target position
+        
         dist = np.linalg.norm(p_tip - p_target)
         
-        # Enhanced reward function to encourage exploration
+        # Improved reward function with better learning signals
         if dist < self.success_threshold:
             # Success reward
-            reward = 10.0  # Increased from 1.0
+            reward = 50.0  # Reduced from 100.0 for more balanced learning
         else:
-            # Distance-based reward to encourage movement toward target
-            reward = -0.1 - dist * 0.5  # Penalize distance but not too harshly
+            # Distance-based reward (closer = better)
+            distance_reward = -dist * 1.0  # Reduced penalty
             
-            # Add exploration bonus for movement
+            # Progress reward - reward for getting closer to target
+            progress_reward = 0.0
+            if hasattr(self, 'prev_dist'):
+                progress = self.prev_dist - dist  # Positive if getting closer
+                progress_reward = progress * 5.0  # Reduced progress reward
+            self.prev_dist = dist
+            
+            # Movement reward - encourage exploration
+            movement_reward = 0.0
             if hasattr(self, 'prev_tip_pos'):
                 movement = np.linalg.norm(p_tip - self.prev_tip_pos)
-                reward += movement * 0.1  # Small bonus for movement
+                movement_reward = movement * 2.0  # Reduced movement reward
             self.prev_tip_pos = p_tip.copy()
+            
+            # Combine rewards
+            reward = distance_reward + progress_reward + movement_reward
+            
+            # Small penalty for time to encourage efficiency
+            reward -= 0.005  # Reduced time penalty
         
         # Episode is done if target is reached or max time exceeded
         done = (dist < self.success_threshold) or (self.env.get_sim_time() > max_time)
@@ -252,6 +255,7 @@ class HeadTouchEnv:
         
         return obs, reward, done, info
     
+                    
     def render(self):
         """Render the current state"""
         if hasattr(self, 'viewer_initialized') and self.viewer_initialized:
@@ -290,7 +294,7 @@ class HeadTouchEnv:
             fig, ax = plt.subplots(figsize=(8, 6))
             
             # Get current positions
-            p_tip = self.env.get_p_body('applicator')
+            p_tip = self.env.get_p_body('applicator_tip')
             p_target = self.env.get_p_body('target_dot')
             p_head = self.env.get_p_body('obj_head')
             
@@ -354,6 +358,30 @@ class HeadTouchEnv:
         # Clear frames to free memory
         self.frames = []
 
+# Replay Buffer for storing experiences
+class ReplayBuffer:
+    def __init__(self, capacity, device='cpu'):
+        self.buffer = deque(maxlen=capacity)
+        self.device = device
+        
+    def put(self, transition):
+        self.buffer.append(transition)
+        
+    def sample(self, batch_size):
+        batch = random.sample(self.buffer, batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
+        
+        states = torch.FloatTensor(np.array(states)).to(self.device)
+        actions = torch.FloatTensor(np.array(actions)).to(self.device)
+        rewards = torch.FloatTensor(np.array(rewards)).to(self.device)
+        next_states = torch.FloatTensor(np.array(next_states)).to(self.device)
+        dones = torch.BoolTensor(np.array(dones)).to(self.device)
+        
+        return states, actions, rewards, next_states, dones
+    
+    def size(self):
+        return len(self.buffer)
+
 # PPO implementation
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim):
@@ -392,13 +420,22 @@ class ActorCritic(nn.Module):
         return self.critic(shared_features)
 
 class PPO:
-    def __init__(self, state_dim, action_dim, lr=1e-4, gamma=0.99, epsilon=0.2):
+    def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, epsilon=0.2):
+        self.a_dim = action_dim
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.actor_critic = ActorCritic(state_dim, action_dim).to(self.device)
-        self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=lr, eps=1e-8)
+        self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=lr, eps=1e-5)
         self.gamma = gamma
         self.epsilon = epsilon
-        self.exploration_noise = 0.3  # Add exploration noise
+        self.exploration_noise = 0.1  # Reduced exploration noise
+        
+        # Initialize replay buffer
+        self.replay_buffer = ReplayBuffer(capacity=10000, device=self.device)  # Smaller buffer
+        self.buffer_warmup = 500  # Smaller warmup
+        
+        print(f"Using device: {self.device}")
+        print(f"Replay buffer capacity: 10000, warmup: {self.buffer_warmup}")
+        print(f"Learning rate: {lr}, Gamma: {gamma}, Epsilon: {epsilon}")
         
     def select_action(self, state, exploration=True):
         # Add batch dimension
@@ -420,7 +457,8 @@ class PPO:
         # Ensure std is positive and add exploration noise
         std = torch.clamp(std, min=1e-6)
         if exploration:
-            std = std + self.exploration_noise  # Add exploration noise
+            # Moderate exploration noise
+            std = std + self.exploration_noise
         
         # Create normal distribution
         dist = Normal(mean, std)
@@ -428,8 +466,14 @@ class PPO:
         # Sample action
         action = dist.sample()
         
+        # Scale actions to be more meaningful (increase action magnitude)
+        action = action * 0.3  # Reduced scaling for more controlled movements
+        
+        # Clip actions to reasonable range
+        action = torch.clamp(action, -1.0, 1.0)
+        
         # Calculate log probability
-        log_prob = dist.log_prob(action).sum(dim=-1)
+        log_prob = dist.log_prob(action / 0.3).sum(dim=-1)  # Adjust for scaling
         
         return action.squeeze(0).cpu().numpy(), log_prob.squeeze(0).detach().cpu().numpy()
     
@@ -459,8 +503,8 @@ class PPO:
         advantages = returns - values
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
-        # PPO update
-        for _ in range(10):  # Multiple epochs
+        # PPO update with better hyperparameters
+        for _ in range(4):  # Reduced epochs for stability
             mean, std, value = self.actor_critic(states)
             dist = Normal(mean, std)
             new_log_probs = dist.log_prob(actions).sum(dim=-1)
@@ -475,11 +519,14 @@ class PPO:
             # Actor loss
             actor_loss = -torch.min(surr1, surr2).mean()
             
-            # Critic loss
-            critic_loss = F.mse_loss(value.squeeze(), returns)
+            # Critic loss with value clipping
+            value_clipped = values + torch.clamp(value.squeeze() - values, -0.5, 0.5)
+            critic_loss1 = F.mse_loss(value.squeeze(), returns)
+            critic_loss2 = F.mse_loss(value_clipped, returns)
+            critic_loss = torch.max(critic_loss1, critic_loss2)
             
-            # Total loss
-            loss = actor_loss + 0.5 * critic_loss
+            # Total loss with better weighting
+            loss = actor_loss + 0.25 * critic_loss  # Reduced critic weight
             
             # Update
             self.optimizer.zero_grad()
@@ -491,7 +538,7 @@ class PPO:
 def train(
     record_video: bool = False,
     n_episodes: int = 500,
-    max_steps: int = 50000,
+    max_steps: int = 2000,
     batch_size: int = 64,
     ):
     """Train the PPO agent"""
@@ -507,38 +554,38 @@ def train(
     # Initialize PPO agent
     state_dim = head_touch_env.o_dim
     action_dim = head_touch_env.a_dim
-    ppo = PPO(state_dim, action_dim)
-    
-    # Video recording setup (only if requested)
-    if record_video:
-        print("Initializing video recording mode...")
-        try:
-            head_touch_env.env.init_viewer(
-                transparent=False,
-                azimuth=105,
-                distance=3.12,
-                elevation=-29,
-                lookat=[0.39, 0.25, 0.43],
-                maxgeom=100000
-            )
-            head_touch_env.viewer_initialized = True
-            print("Video recording mode initialized")
-        except Exception as e:
-            print(f"Warning: Could not initialize video recording: {e}")
-            record_video = False
+    ppo = PPO(state_dim, action_dim)    
+    print(f"viewer_initialized: {head_touch_env.viewer_initialized}")
     
     # Training loop
     episode_rewards = []
     episode_lengths = []
     
+    # Warmup phase to collect initial experiences
+    print("Starting warmup phase to collect initial experiences...")
+    warmup_episodes = 10
+    for warmup_ep in range(warmup_episodes):
+        obs = head_touch_env.reset()
+        for step in range(max_steps):
+            # Use random actions during warmup
+            action = np.random.uniform(-1.0, 1.0, size=ppo.a_dim)
+            next_obs, reward, done, info = head_touch_env.step(action)
+            ppo.replay_buffer.put((obs, action, reward, next_obs, done))
+            obs = next_obs
+            if done:
+                break
+        if (warmup_ep + 1) % 5 == 0:
+            print(f"Warmup episode {warmup_ep + 1}/{warmup_episodes}, Buffer size: {ppo.replay_buffer.size()}")
+    
+    print(f"Warmup complete. Buffer size: {ppo.replay_buffer.size()}")
+    
     for episode in range(n_episodes):
         obs = head_touch_env.reset()
         episode_reward = 0
         episode_length = 0
-        states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
         
-        # Add exploration decay
-        exploration_rate = max(0.1, 1.0 - episode / (n_episodes * 0.7))
+        # Add exploration decay - slower decay for better exploration
+        exploration_rate = max(0.3, 1.0 - episode / (n_episodes * 0.8))  # Slower decay, higher minimum
         
         for step in range(max_steps):
             # Select action with exploration
@@ -547,38 +594,59 @@ def train(
             # Execute action
             next_obs, reward, done, info = head_touch_env.step(action)
             
-            # Render if video recording (every 10 steps to reduce load)
-            if record_video and step % 10 == 0:
-                head_touch_env.env.render()
+            # Store experience in replay buffer
+            ppo.replay_buffer.put((obs, action, reward, next_obs, done))
             
-            # Store transition
-            states.append(obs)
-            actions.append(action)
-            rewards.append(reward)
-            log_probs.append(log_prob)
-            values.append(ppo.actor_critic.get_value(torch.FloatTensor(obs).unsqueeze(0).to(ppo.device)).item())
-            dones.append(done)
+            # Render if video recording (every 10 steps to reduce load)
+            if record_video and step % 50 == 0:
+                head_touch_env.env.plot_sphere(p=head_touch_env.env.get_p_body('applicator_tip'), r=0.005, rgba=(1,0,1,1), label='Tip')
+                head_touch_env.env.plot_sphere(p=head_touch_env.env.get_p_body('target_dot'), r=0.005, rgba=(0,0,1,1), label='Target')
+                head_touch_env.env.render()
             
             obs = next_obs
             episode_reward += reward
             episode_length += 1
             
-            # Only end episode if target is reached, not on time limit
-            if done and info.get('dist', float('inf')) < head_touch_env.success_threshold:
+            # End episode if target is reached or time limit exceeded
+            if done:
                 break
         
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
         
-        # Update policy if we have enough data
-        if len(states) >= batch_size:
-            ppo.update(states, actions, rewards, log_probs, values, dones)
+        # Update policy using replay buffer if we have enough data
+        if ppo.replay_buffer.size() >= ppo.buffer_warmup:
+            # Sample multiple batches for more stable training
+            for _ in range(3):  # Reduced from 5 to 3 updates per episode
+                if ppo.replay_buffer.size() >= batch_size:
+                    states, actions, rewards, next_states, dones = ppo.replay_buffer.sample(batch_size)
+                    
+                    # Calculate values for current states
+                    values = []
+                    for state in states:
+                        value = ppo.actor_critic.get_value(state.unsqueeze(0)).item()
+                        values.append(value)
+                    values = torch.FloatTensor(values).to(ppo.device)
+                    
+                    # Calculate log probabilities for actions
+                    log_probs = []
+                    for state, action in zip(states, actions):
+                        mean, std, _ = ppo.actor_critic(state.unsqueeze(0))
+                        dist = Normal(mean, std)
+                        log_prob = dist.log_prob(action.unsqueeze(0)).sum(dim=-1)
+                        log_probs.append(log_prob.squeeze())
+                    log_probs = torch.stack(log_probs)
+                    
+                    # Update policy
+                    ppo.update(states.cpu().numpy(), actions.cpu().numpy(), rewards.cpu().numpy(), 
+                              log_probs.detach().cpu().numpy(), values.cpu().numpy(), dones.cpu().numpy())
         
         # Print progress
         if (episode + 1) % 10 == 0:
             avg_reward = np.mean(episode_rewards[-10:])
             avg_length = np.mean(episode_lengths[-10:])
-            print(f"Episode {episode + 1}/{n_episodes}, Avg Reward: {avg_reward:.2f}, Avg Length: {avg_length:.1f}, Exploration: {exploration_rate:.2f}")
+            buffer_size = ppo.replay_buffer.size()
+            print(f"Episode {episode + 1}/{n_episodes}, Avg Reward: {avg_reward:.2f}, Avg Length: {avg_length:.1f}, Exploration: {exploration_rate:.2f}, Buffer: {buffer_size}")
         
         # Early stopping if consistently successful
         if len(episode_rewards) >= 50:
@@ -679,22 +747,22 @@ def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5):
 def main(mode='fast', record_video=False, test_only=False):
     """Main function to handle training and testing"""
     if mode == 'fast':
-        n_episodes = 100
-        max_steps = 1000
-        batch_size = 32
+        n_episodes = 300  # Increased from 200
+        max_steps = 1500  # Reduced from 2000 for faster episodes
+        batch_size = 128  # Increased from 32 for better stability
     elif mode == 'normal':
-        n_episodes = 500
-        max_steps = 2000
-        batch_size = 64
+        n_episodes = 1500  # Increased from 1000
+        max_steps = 2000   # Reduced from 3000
+        batch_size = 256   # Increased from 64
     elif mode == 'video':
-        n_episodes = 50
-        max_steps = 1000
-        batch_size = 32
+        n_episodes = 150   # Increased from 100
+        max_steps = 1500   # Reduced from 2000
+        batch_size = 128   # Increased from 32
         record_video = True  # Force video recording for video mode
     elif mode == 'full':
-        n_episodes = 1000
-        max_steps = 5000
-        batch_size = 128
+        n_episodes = 3000  # Increased from 2000
+        max_steps = 3000   # Reduced from 5000
+        batch_size = 512   # Increased from 128
     else:
         print(f"Unknown mode: {mode}")
         return

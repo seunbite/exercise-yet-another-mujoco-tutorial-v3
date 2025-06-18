@@ -2,7 +2,16 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*/ppo_model.pth
 
+import json
+
+def sample_json(filename, sample_size):
+    with open(filename, 'r') as f:
+        return [json.loads(next(f)) for _ in range(sample_size)]
+
+sample_data = sample_json('data/data13_15_kaggle.jsonl', 10000)
+df = pd.DataFrame(sample_data)
 # C extensions
 *.so
 

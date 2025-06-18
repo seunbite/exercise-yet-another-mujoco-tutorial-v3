@@ -9,12 +9,11 @@
             <geom type="mesh" material="head_mat" mesh="head" class="visual_collision" />
             <inertial pos="0 0 0" mass="30" diaginertia="0.1 0.1 0.1" />
             
-            <!-- Target dot that can be randomly positioned -->
-            <body name="target_dot" pos="0.0 0.05 0.12"> <!-- 머리 기준 상대위치 -->
-                <geom type="sphere" size="0.01" rgba="1 0 0 1" mass="0.001" 
-                      contype="1" conaffinity="1"/>
-                <site name="target_site" size="0.015" rgba="1 0 0 0.3" />
+            <!-- Target dot positioned on the upper surface of the head -->
+            <body name="target_dot" pos="0.1 0.2 0.1">
+                <site name="target_site" size="0.015" rgba="1 0 0 1" />
             </body>
+
         </body>
     </worldbody>
 </mujoco>
