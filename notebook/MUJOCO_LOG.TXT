@@ -112,3 +112,6 @@ WARNING: mju_openResource: unknown file '/mnt/d/workspace/iyy1112/workspace/exer
 Tue Jun 17 10:14:18 2025
 WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/asset/snapbot/scene_snapbot.xml'
 
+Thu Jun 19 09:12:33 2025
+WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/asset/tabletop_manipulation/scene_ur5e_objects.xml'
+

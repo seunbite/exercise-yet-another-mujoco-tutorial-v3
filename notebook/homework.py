@@ -22,12 +22,26 @@ from owlv2 import *
 
 # Environment class
 class HeadTouchEnv:
-    def __init__(self, env, HZ=50, record_video=False):
+    def __init__(self, env, HZ=50, record_video=False, initial_joint_angles=[0, -60, 90, -60, -90, 0], waiting_time=0.0, joint_names=None):
         self.env = env
         self.HZ = HZ
         self.record_video = record_video
         self.frames = []  # Store frames for video
         
+        # All joint names for the UR5e robot
+        self.all_joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 
+                               'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+        
+        # Controllable joints (subset of all joints)
+        self.joint_names = joint_names if joint_names is not None else self.all_joint_names
+        
+        # Initial angles for ALL joints (must be 6 values)
+        if len(initial_joint_angles) != 6:
+            raise ValueError("initial_joint_angles must have exactly 6 values for all UR5e joints")
+        self.initial_joint_angles = np.deg2rad(initial_joint_angles)
+        
+        self.waiting_time = waiting_time
+
         # Setup environment like in the notebook
         self._setup_environment()
         
@@ -58,14 +72,17 @@ class HeadTouchEnv:
         
         # Get observation dimensions (headless version)
         test_obs = self._get_observation()
-        self.o_dim = test_obs.shape[0]  # 18 values: 6 joint pos + 6 joint vel + 3 tip pos + 3 target pos
-        self.a_dim = 6  # 6 joint angles (no gripper)
+        self.o_dim = test_obs.shape[0]  # joint pos + joint vel + tip pos + target pos
+        self.a_dim = len(self.joint_names)  # Only controllable joints
         
         # Success threshold
         self.success_threshold = 0.02  # 2cm
         
         print(f"[HeadTouch] Instantiated")
         print(f"   [info] dt:[{1.0/self.HZ:.4f}] HZ:[{self.HZ}], state_dim:[{self.o_dim}], a_dim:[{self.a_dim}]")
+        print(f"   [info] All joints: {self.all_joint_names}")
+        print(f"   [info] Controllable joints: {self.joint_names}")
+        print(f"   [info] Fixed joints: {[j for j in self.all_joint_names if j not in self.joint_names]}")
         if self.record_video:
             print(f"   [info] Video recording enabled")
             if self.viewer_initialized:
@@ -84,58 +101,22 @@ class HeadTouchEnv:
         # Move table to proper position
         self.env.set_p_body(body_name='object_table', p=np.array([1.0, 0, 0]))
         
-        # Setup objects (head)
+        # Setup objects (head) - no rotation to keep it stable
+        self.env.set_p_base_body(body_name='obj_head', p=[1, 0, 0.55])
         
-        # Position objects on table
-        obj_xyzs = np.array([[1.1, 0, 0.51]])  # Position on table
-        R = rpy2r(np.radians([0, 0, 270]))  # Rotation
-
-        self.env.set_p_base_body(body_name='obj_head', p=obj_xyzs[0, :])
-        self.env.set_R_base_body(body_name='obj_head', R=R)
-        
-        # Wait for 10 seconds to let physics settle (no frame capture during settling)
-        waiting_time = 10.0
-        print(f"Waiting {waiting_time} seconds for physics to settle...")
-        wait_steps = int(waiting_time / self.env.dt)  # Convert seconds to simulation steps
-        for _ in range(wait_steps):
-            self.env.step()
-        print("Physics settling complete.")
-        
-        # Solve IK to get initial robot pose
-        joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-                      'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
-        
-        q_init, ik_err_stack, ik_info = solve_ik(
-            env=self.env,
-            joint_names_for_ik=joint_names,
-            body_name_trgt='ur_camera_center',
-            q_init=np.deg2rad([0, 0, 0, 0, 0, 0]),  # ik from zero pose
-            p_trgt=np.array([0.41, 0.0, 1.2]),
-            R_trgt=rpy2r(np.deg2rad([-135.22, -0., -90])),
-            max_ik_tick=5000,
-            ik_err_th=1e-4,
-            ik_stepsize=0.1,
-            ik_eps=1e-2,
-            ik_th=np.radians(1.0),
-            verbose=False,
-            reset_env=False,
-            render=False,
-            render_every=1,
-        )
-        
-        # Set initial joint positions
-        self.env.set_qpos_joints(joint_names=joint_names, qpos=q_init)
+        # Set initial joint positions for ALL joints
+        self.env.set_qpos_joints(joint_names=self.all_joint_names, qpos=self.initial_joint_angles)
+        print(f"Setting initial joint angles (degrees): {np.rad2deg(self.initial_joint_angles)}")
         
         # Store initial configuration for reset
-        self.initial_qpos = q_init
-        self.joint_names = joint_names
+        self.initial_qpos = self.initial_joint_angles
     
     def _get_observation(self):
         """Get current observation (headless version using joint positions)"""
-        # Get joint positions for the 6 arm joints
+        # Get joint positions for the controllable joints only
         joint_positions = self.env.get_qpos_joints(joint_names=self.joint_names)
         
-        # Get joint velocities
+        # Get joint velocities for controllable joints only
         joint_velocities = self.env.get_qvel_joints(joint_names=self.joint_names)
         
         # Get end-effector position
@@ -146,15 +127,15 @@ class HeadTouchEnv:
         
         # Combine all observations
         obs = np.concatenate([
-            joint_positions,      # 6 values
-            joint_velocities,     # 6 values  
+            joint_positions,      # N values (N = number of controllable joints)
+            joint_velocities,     # N values  
             p_tip,               # 3 values
             p_target             # 3 values
         ])
         
         return obs
     
-    def reset(self):
+    def reset(self, do_randomization: bool = False):
         """Reset environment to initial state"""
         # Reset MuJoCo environment
         self.env.reset(step=True)
@@ -167,30 +148,32 @@ class HeadTouchEnv:
         self.env.set_p_body(body_name='ur_base', p=np.array([0, 0, 0.5]))
         self.env.set_p_body(body_name='object_table', p=np.array([1.0, 0, 0]))
         
-        # Reset objects to initial positions
-        obj_names = ['obj_head']
-        obj_xyzs = np.array([[1, 0, 0.51]])
-        R = rpy2r(np.radians([0, 0, 270]))
+        # Reset objects to initial positions - keep stable
+        self.env.set_p_base_body(body_name='obj_head', p=[1, 0, 0.55])
+        self.env.set_R_base_body(body_name='obj_head', R=rpy2r(np.radians([0, 270, 0])))
         
-        for obj_idx, obj_name in enumerate(obj_names):
-            self.env.set_p_base_body(body_name=obj_name, p=obj_xyzs[obj_idx, :])
-            self.env.set_R_base_body(body_name=obj_name, R=R)
-        
-        # Set robot to initial joint configuration with small randomization
-        if hasattr(self, 'joint_names') and len(self.joint_names) > 0:
+        # Set robot to initial joint configuration with optional randomization
+        if do_randomization:
             # Add small random noise to initial positions for exploration
-            noise = np.random.uniform(-0.1, 0.1, size=self.initial_qpos.shape)
-            noisy_initial_qpos = self.initial_qpos + noise
-            self.env.set_qpos_joints(joint_names=self.joint_names, qpos=noisy_initial_qpos)
+            # But only for controllable joints, others stay fixed
+            initial_all_joints = self.initial_qpos.copy()
+            
+            # Get indices of controllable joints
+            controllable_indices = [self.all_joint_names.index(name) for name in self.joint_names]
+            
+            # Add noise only to controllable joints
+            for idx in controllable_indices:
+                initial_all_joints[idx] += np.random.uniform(-0.1, 0.1)
+            
+            self.env.set_qpos_joints(joint_names=self.all_joint_names, qpos=initial_all_joints)
         else:
-            self.env.set_qpos_joints(joint_names=self.joint_names, qpos=self.initial_qpos)
+            self.env.set_qpos_joints(joint_names=self.all_joint_names, qpos=self.initial_qpos)
         
         # Fast physics settling without rendering (more efficient)
-        settling_time = 2.0  # Reduced settling time
-        print(f"Fast settling for {settling_time} seconds...")
+        print(f"Fast settling for {self.waiting_time} seconds...")
         
         # Run physics at full speed without rendering
-        wait_steps = int(settling_time / self.env.dt)
+        wait_steps = int(self.waiting_time / self.env.dt)
         for _ in range(wait_steps):
             self.env.step()
         
@@ -201,9 +184,28 @@ class HeadTouchEnv:
     
     def step(self, action, max_time=60.0):
         """Execute action and get next observation"""
-        # Apply action to robot joints
-        idxs_step = self.env.get_idxs_step(joint_names=self.joint_names)
-        self.env.step(ctrl=action, ctrl_idxs=idxs_step)
+        # Create full control vector for all joints
+        full_ctrl = np.zeros(6)  # 6 joints total
+        
+        # Set fixed joints to their initial positions (hold them fixed)
+        for i, joint_name in enumerate(self.all_joint_names):
+            if joint_name not in self.joint_names:
+                # This is a fixed joint - hold it at initial position
+                current_pos = self.env.get_qpos_joints(joint_names=[joint_name])
+                target_pos = self.initial_joint_angles[i]
+                # Use PD control to hold fixed joints at their initial positions
+                full_ctrl[i] = 10.0 * (target_pos - current_pos)  # Strong position control
+        
+        # Set controllable joints to the provided actions
+        controllable_idx = 0
+        for i, joint_name in enumerate(self.all_joint_names):
+            if joint_name in self.joint_names:
+                full_ctrl[i] = action[controllable_idx]
+                controllable_idx += 1
+        
+        # Apply control to all joints
+        idxs_step = self.env.get_idxs_step(joint_names=self.all_joint_names)
+        self.env.step(ctrl=full_ctrl, ctrl_idxs=idxs_step)
         
         # Get new observation
         obs = self._get_observation()
@@ -394,13 +396,14 @@ class ActorCritic(nn.Module):
         return self.critic(shared_features)
 
 class PPO:
-    def __init__(self, state_dim, action_dim, lr=1e-4, gamma=0.99, epsilon=0.2):
+    def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, epsilon=0.3):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")  # Show which device is being used
         self.actor_critic = ActorCritic(state_dim, action_dim).to(self.device)
         self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=lr, eps=1e-8)
         self.gamma = gamma
         self.epsilon = epsilon
-        self.exploration_noise = 0.3  # Add exploration noise
+        self.exploration_noise = 1  # Add exploration noise
         
     def select_action(self, state, exploration=True):
         # Add batch dimension
@@ -431,14 +434,11 @@ class PPO:
         # Sample action
         action = dist.sample()
         
-        # Scale actions to be more meaningful (increase action magnitude)
-        action = action * 0.5  # Scale actions to be larger
-        
         # Clip actions to reasonable range
         action = torch.clamp(action, -1.0, 1.0)
         
         # Calculate log probability
-        log_prob = dist.log_prob(action / 0.5).sum(dim=-1)  # Adjust for scaling
+        log_prob = dist.log_prob(action).sum(dim=-1)
         
         return action.squeeze(0).cpu().numpy(), log_prob.squeeze(0).detach().cpu().numpy()
     
@@ -499,9 +499,15 @@ class PPO:
 
 def train(
     record_video: bool = False,
+    initial_joint_angles: list = [0, -60, 90, -60, -90, 0],
+    epsilon: float = 0.3,
+    gamma: float = 0.99,
+    lr: float = 3e-4,
     n_episodes: int = 500,
     max_steps: int = 2000,
     batch_size: int = 64,
+    waiting_time: float = 1.0,
+    joint_names: list = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
     ):
     """Train the PPO agent"""
     print("Starting training")
@@ -511,12 +517,12 @@ def train(
         name='ur5e_rg2',
         rel_xml_path='../asset/makeup_frida/scene_table.xml',
         verbose=True
-    ), record_video=record_video)
+    ), record_video=record_video, initial_joint_angles=initial_joint_angles, waiting_time=waiting_time, joint_names=joint_names)
     
     # Initialize PPO agent
     state_dim = head_touch_env.o_dim
     action_dim = head_touch_env.a_dim
-    ppo = PPO(state_dim, action_dim)    
+    ppo = PPO(state_dim, action_dim, epsilon=epsilon, gamma=gamma, lr=lr)    
     print(f"viewer_initialized: {head_touch_env.viewer_initialized}")
     
     # Training loop
@@ -594,7 +600,7 @@ def train(
     
     return ppo, episode_rewards
 
-def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5):
+def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5, initial_joint_angles=[0, -60, 90, -60, -90, 0], joint_names=['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']):
     """Test a trained model with optional video recording"""
     print(f"Testing model from {model_path}")
     
@@ -603,7 +609,7 @@ def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5):
         name='ur5e_rg2',
         rel_xml_path='../asset/makeup_frida/scene_table.xml',
         verbose=True
-    ), record_video=record_video)
+    ), record_video=record_video, initial_joint_angles=initial_joint_angles, joint_names=joint_names)
     
     # Load model
     state_dim = head_touch_env.o_dim
@@ -637,7 +643,7 @@ def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5):
     
     # Test episodes
     for episode in range(n_episodes):
-        obs = head_touch_env.reset()
+        obs = head_touch_env.reset(do_randomization=False)
         episode_reward = 0
         step_count = 0
         
@@ -672,44 +678,40 @@ def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5):
         head_touch_env.env.close_viewer()
         print("Test video recording completed")
 
-def main(mode='fast', record_video=False, test_only=False):
+def main(
+    record_video: bool = True,
+    test_only: bool = False,
+    initial_joint_angles: list = [0, -60, 90, -60, -90, 0],
+    epsilon: float = 0.3,
+    gamma: float = 0.99,
+    lr: float = 3e-4,
+    batch_size: int = 32,
+    max_steps: int = 2000,
+    n_episodes: int = 200,
+    waiting_time: float = 1.0,
+    joint_names: list = ['wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+    ):
     """Main function to handle training and testing"""
-    if mode == 'fast':
-        n_episodes = 200  # Increased from 100
-        max_steps = 2000  # Increased from 1000
-        batch_size = 32
-    elif mode == 'normal':
-        n_episodes = 1000  # Increased from 500
-        max_steps = 3000   # Increased from 2000
-        batch_size = 64
-    elif mode == 'video':
-        n_episodes = 100   # Increased from 50
-        max_steps = 2000   # Increased from 1000
-        batch_size = 32
-        record_video = True  # Force video recording for video mode
-    elif mode == 'full':
-        n_episodes = 2000  # Increased from 1000
-        max_steps = 5000
-        batch_size = 128
-    else:
-        print(f"Unknown mode: {mode}")
-        return
     
     if test_only:
-        test_model(record_video=record_video)
+        test_model(record_video=record_video, initial_joint_angles=initial_joint_angles, joint_names=joint_names)
     else:
         # Training - NO GUI
         ppo, rewards = train(
-            record_video=True if mode == 'video' else False,
+            record_video=record_video,
             n_episodes=n_episodes,
             max_steps=max_steps,
-            batch_size=batch_size
+            batch_size=batch_size,
+            initial_joint_angles=initial_joint_angles,
+            epsilon=epsilon,
+            gamma=gamma,
+            lr=lr,
+            waiting_time=waiting_time,
+            joint_names=joint_names,
         )
         
         # Test with GUI if video mode or record_video is True
-        if record_video or mode == 'video':
-            print("\nTesting trained model with video recording...")
-            test_model(record_video=True, n_episodes=3)
+        test_model(record_video=True, n_episodes=3, initial_joint_angles=initial_joint_angles, joint_names=joint_names)
 
 if __name__ == "__main__":
     import fire
