@@ -7,7 +7,7 @@
         <body name="obj_head" pos="0 0 0" euler="0 0 0">
             <joint type="free" />
             <geom type="mesh" material="head_mat" mesh="head" class="visual_collision" />
-            <inertial pos="0 0 0" mass="30" diaginertia="0.1 0.1 0.1" />
+            <inertial pos="0 0 0" mass="90" diaginertia="0.1 0.1 0.1" />
             
             <!-- Target dot positioned on the upper surface of the head -->
             <body name="target_dot" pos="0.1 0.2 0.1">
@@ -16,4 +16,4 @@
 
         </body>
     </worldbody>
-</mujoco>
+</mujoco>   

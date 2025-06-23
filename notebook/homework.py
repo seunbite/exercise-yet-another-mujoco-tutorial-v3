@@ -4,11 +4,13 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Normal
+from tqdm import trange
 import matplotlib.pyplot as plt
 import cv2
 from PIL import Image
 import io
 import torch.nn.functional as F
+import wandb
 
 sys.path.append('../package/helper/')
 sys.path.append('../package/mujoco_usage/')
@@ -20,35 +22,42 @@ from transformation import *
 from gpt_helper import *
 from owlv2 import *
 
-# Environment class
+
 class HeadTouchEnv:
-    def __init__(self, env, HZ=50, record_video=False, initial_joint_angles=[0, -60, 90, -60, -90, 0], waiting_time=0.0, joint_names=None):
+    def __init__(
+        self, 
+        env, 
+        HZ=50, 
+        record_video=False, 
+        initial_joint_angles=[0, -60, 90, -60, -90, 0], 
+        waiting_time=0.0, 
+        joint_names=None, 
+        head_position=[1, 0, 0.55], normalize_obs=True
+        ):
         self.env = env
         self.HZ = HZ
         self.record_video = record_video
-        self.frames = []  # Store frames for video
-        
-        # All joint names for the UR5e robot
-        self.all_joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 
-                               'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
-        
-        # Controllable joints (subset of all joints)
+        self.frames = []
+        self.head_position = head_position
+        self.normalize_obs = normalize_obs
+
+        self.all_joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
         self.joint_names = joint_names if joint_names is not None else self.all_joint_names
+        self.waiting_time = waiting_time
         
-        # Initial angles for ALL joints (must be 6 values)
         if len(initial_joint_angles) != 6:
             raise ValueError("initial_joint_angles must have exactly 6 values for all UR5e joints")
-        self.initial_joint_angles = np.deg2rad(initial_joint_angles)
-        
-        self.waiting_time = waiting_time
+        self.initial_joint_angles_rad = np.deg2rad(initial_joint_angles)
 
-        # Setup environment like in the notebook
-        self._setup_environment()
+        # location
+        self.env.reset()
+        self.env.set_p_body(body_name='ur_base', p=np.array([0, 0, 0.5]))
+        self.env.set_p_body(body_name='object_table', p=np.array([1.0, 0, 0]))
+        self.env.set_p_base_body(body_name='obj_head', p=self.head_position)
+        self.env.set_qpos_joints(joint_names=self.all_joint_names, qpos=self.initial_joint_angles_rad)
         
-        # Initialize viewer for recording if needed
         if self.record_video:
             try:
-                # Try to initialize viewer normally
                 self.env.init_viewer(
                     transparent=False,
                     azimuth=105,
@@ -64,19 +73,26 @@ class HeadTouchEnv:
                 print("Will use headless rendering for video capture")
                 self.viewer_initialized = False
             
-            # Initialize the backup image
             self.env.grab_image_backup = np.zeros((400, 600, 3), dtype=np.uint8)
 
         else:
             self.viewer_initialized = False
         
-        # Get observation dimensions (headless version)
-        test_obs = self._get_observation()
-        self.o_dim = test_obs.shape[0]  # joint pos + joint vel + tip pos + target pos
-        self.a_dim = len(self.joint_names)  # Only controllable joints
+        test_obs = self._get_observation_raw()
+        self.o_dim = test_obs.shape[0]
+        self.a_dim = len(self.joint_names)
         
-        # Success threshold
-        self.success_threshold = 0.02  # 2cm
+        if self.normalize_obs:
+            self.obs_mean = np.zeros(self.o_dim)
+            self.obs_var = np.ones(self.o_dim)
+            self.obs_count = 1e-4
+            self.obs_min = np.full(self.o_dim, np.inf)
+            self.obs_max = np.full(self.o_dim, -np.inf)
+        
+        self.success_threshold = 0.02
+        
+        print(f"[HeadTouch] Setting up initial state...")
+        self.reset()
         
         print(f"[HeadTouch] Instantiated")
         print(f"   [info] dt:[{1.0/self.HZ:.4f}] HZ:[{self.HZ}], state_dim:[{self.o_dim}], a_dim:[{self.a_dim}]")
@@ -90,29 +106,10 @@ class HeadTouchEnv:
             else:
                 print(f"   [info] Using headless rendering")
     
-    def _setup_environment(self):
-        """Setup environment with tables, objects, and initial positioning"""
-        # Reset environment
-        self.env.reset()
-        
-        # Move UR5e base to proper position
-        self.env.set_p_body(body_name='ur_base', p=np.array([0, 0, 0.5]))
-        
-        # Move table to proper position
-        self.env.set_p_body(body_name='object_table', p=np.array([1.0, 0, 0]))
-        
-        # Setup objects (head) - no rotation to keep it stable
-        self.env.set_p_base_body(body_name='obj_head', p=[1, 0, 0.55])
-        
-        # Set initial joint positions for ALL joints
-        self.env.set_qpos_joints(joint_names=self.all_joint_names, qpos=self.initial_joint_angles)
-        print(f"Setting initial joint angles (degrees): {np.rad2deg(self.initial_joint_angles)}")
-        
-        # Store initial configuration for reset
-        self.initial_qpos = self.initial_joint_angles
+
     
-    def _get_observation(self):
-        """Get current observation (headless version using joint positions)"""
+    def _get_observation_raw(self):
+        """Get raw observation without normalization"""
         # Get joint positions for the controllable joints only
         joint_positions = self.env.get_qpos_joints(joint_names=self.joint_names)
         
@@ -121,69 +118,121 @@ class HeadTouchEnv:
         
         # Get end-effector position
         p_tip = self.env.get_p_body('applicator_tip')
-        
-        # Get target position
-        p_target = self.env.get_p_body('target_dot')
+        try:
+            p_target = self.p_target
+        except:
+            p_target = self.head_position
         
         # Combine all observations
         obs = np.concatenate([
             joint_positions,      # N values (N = number of controllable joints)
             joint_velocities,     # N values  
             p_tip,               # 3 values
-            p_target             # 3 values
+            p_target            # 3 values
         ])
         
         return obs
     
-    def reset(self, do_randomization: bool = False):
+    def _update_obs_stats(self, obs):
+        """Update running statistics for observation normalization"""
+        if not self.normalize_obs:
+            return
+            
+        self.obs_count += 1
+        delta = obs - self.obs_mean
+        self.obs_mean += delta / self.obs_count
+        self.obs_var += delta * (obs - self.obs_mean)
+        
+        # Update min/max for bounded normalization
+        self.obs_min = np.minimum(self.obs_min, obs)
+        self.obs_max = np.maximum(self.obs_max, obs)
+    
+    def _normalize_obs(self, obs):
+        """Normalize observation to [-1, 1] range using min-max normalization"""
+        if not self.normalize_obs:
+            return obs
+            
+        # Use min-max normalization to bound values to [-1, 1]
+        obs_range = self.obs_max - self.obs_min
+        
+        # Avoid division by zero for constant values
+        obs_range = np.where(obs_range < 1e-8, 1.0, obs_range)
+        
+        # Normalize to [0, 1] then scale to [-1, 1]
+        normalized_obs = (obs - self.obs_min) / obs_range  # [0, 1]
+        normalized_obs = 2.0 * normalized_obs - 1.0       # [-1, 1]
+        
+        # Ensure values are strictly bounded
+        normalized_obs = np.clip(normalized_obs, -1.0, 1.0)
+        
+        return normalized_obs
+    
+    def _get_observation(self):
+        """Get normalized observation"""
+        # Get raw observation
+        raw_obs = self._get_observation_raw()
+        
+        # Update running statistics
+        self._update_obs_stats(raw_obs)
+        
+        # Return normalized observation
+        return self._normalize_obs(raw_obs)
+    
+    def _dynamic_target(self, p_target, x, y, z):
+        """Dynamic target position with bounds checking"""
+        # Generate random offset
+        offset = np.array([
+            np.random.uniform(x[0], x[1]), 
+            np.random.uniform(y[0], y[1]), 
+            np.random.uniform(z[0], z[1])
+        ])
+        
+        # Apply offset to base target position
+        new_target = p_target + offset
+        
+        # Ensure target stays within reasonable bounds (e.g., above table surface)
+        new_target[2] = np.clip(new_target[2], 0.3, 1.5)  # Z between 30cm and 1.5m
+        
+        return new_target
+    
+    def reset(self):
         """Reset environment to initial state"""
-        # Reset MuJoCo environment
         self.env.reset(step=True)
         
-        # Reset exploration state
-        if hasattr(self, 'prev_tip_pos'):
-            delattr(self, 'prev_tip_pos')
+        self.prev_dist = None
+        if hasattr(self, 'step_count'):
+            self.step_count = 0
         
-        # Re-setup environment positions
         self.env.set_p_body(body_name='ur_base', p=np.array([0, 0, 0.5]))
         self.env.set_p_body(body_name='object_table', p=np.array([1.0, 0, 0]))
         
-        # Reset objects to initial positions - keep stable
-        self.env.set_p_base_body(body_name='obj_head', p=[1, 0, 0.55])
+        self.env.set_p_base_body(body_name='obj_head', p=self.head_position)
         self.env.set_R_base_body(body_name='obj_head', R=rpy2r(np.radians([0, 270, 0])))
+
+        self.p_target = self._dynamic_target(self.head_position, x=[-0.01, 0.05], y=[-0.1, 0.1], z=[-0.02, 0.02])
+        self.env.set_p_body(body_name='target_dot', p=self.p_target)
+        self.env.set_qpos_joints(joint_names=self.all_joint_names, qpos=self.initial_joint_angles_rad)
         
-        # Set robot to initial joint configuration with optional randomization
-        if do_randomization:
-            # Add small random noise to initial positions for exploration
-            # But only for controllable joints, others stay fixed
-            initial_all_joints = self.initial_qpos.copy()
-            
-            # Get indices of controllable joints
-            controllable_indices = [self.all_joint_names.index(name) for name in self.joint_names]
-            
-            # Add noise only to controllable joints
-            for idx in controllable_indices:
-                initial_all_joints[idx] += np.random.uniform(-0.1, 0.1)
-            
-            self.env.set_qpos_joints(joint_names=self.all_joint_names, qpos=initial_all_joints)
-        else:
-            self.env.set_qpos_joints(joint_names=self.all_joint_names, qpos=self.initial_qpos)
-        
-        # Fast physics settling without rendering (more efficient)
-        print(f"Fast settling for {self.waiting_time} seconds...")
-        
-        # Run physics at full speed without rendering
         wait_steps = int(self.waiting_time / self.env.dt)
-        for _ in range(wait_steps):
-            self.env.step()
-        
-        # Target dot position is fixed in XML file - no randomization needed
-        # The target_dot is already positioned at (0, 0, 0.3) relative to obj_head in the XML
+        for step_i in range(wait_steps):
+            full_ctrl = np.zeros(6)
+            for i, joint_name in enumerate(self.all_joint_names):
+                if joint_name not in self.joint_names:
+                    current_pos = self.env.get_qpos_joints(joint_names=[joint_name])
+                    target_pos = self.initial_joint_angles_rad[i]
+                    full_ctrl[i] = 5.0 * (target_pos - current_pos)
+            
+            idxs_step = self.env.get_idxs_step(joint_names=self.all_joint_names)
+            self.env.step(ctrl=full_ctrl, ctrl_idxs=idxs_step)
         
         return self._get_observation()
     
     def step(self, action, max_time=60.0):
-        """Execute action and get next observation"""
+        """Execute action and get next observation
+        
+        Args:
+            action: Normalized actions in [-1, 1] range for controllable joints
+        """
         # Create full control vector for all joints
         full_ctrl = np.zeros(6)  # 6 joints total
         
@@ -192,11 +241,12 @@ class HeadTouchEnv:
             if joint_name not in self.joint_names:
                 # This is a fixed joint - hold it at initial position
                 current_pos = self.env.get_qpos_joints(joint_names=[joint_name])
-                target_pos = self.initial_joint_angles[i]
+                target_pos = self.initial_joint_angles_rad[i]
                 # Use PD control to hold fixed joints at their initial positions
                 full_ctrl[i] = 10.0 * (target_pos - current_pos)  # Strong position control
         
-        # Set controllable joints to the provided actions
+        
+        # Set controllable joints to the provided actions with proper scaling
         controllable_idx = 0
         for i, joint_name in enumerate(self.all_joint_names):
             if joint_name in self.joint_names:
@@ -212,37 +262,33 @@ class HeadTouchEnv:
         
         # Calculate reward
         p_tip = self.env.get_p_body('applicator_tip')  # Get applicator tip position
-        p_target = self.env.get_p_body('target_dot')  # Get target position
         
-        dist = np.linalg.norm(p_tip - p_target)
+        dist = np.linalg.norm(p_tip - self.p_target)
         
-        # Improved reward function with better learning signals
+        # NORMALIZED REWARD FUNCTION - bounded to [-1, 1]
         if dist < self.success_threshold:
-            # Success reward
-            reward = 100.0  # Much higher success reward
+            # Maximum reward for success
+            reward = 1.0
         else:
-            # Distance-based reward (closer = better)
-            distance_reward = -dist * 2.0  # Stronger distance penalty
+            # Dense distance-based reward using exponential decay
+            max_expected_dist = 2.0  # Maximum expected distance
             
-            # Progress reward - reward for getting closer to target
-            progress_reward = 0.0
-            if hasattr(self, 'prev_dist'):
-                progress = self.prev_dist - dist  # Positive if getting closer
-                progress_reward = progress * 10.0  # Reward for progress
-            self.prev_dist = dist
+            # Map distance to [0, 1] range using exponential decay
+            # Close distances (0m) → 1.0, far distances (2m+) → ~0.0
+            distance_reward = np.exp(-3.0 * dist / max_expected_dist)
             
-            # Movement reward - encourage exploration
-            movement_reward = 0.0
-            if hasattr(self, 'prev_tip_pos'):
-                movement = np.linalg.norm(p_tip - self.prev_tip_pos)
-                movement_reward = movement * 5.0  # Reward for movement
-            self.prev_tip_pos = p_tip.copy()
+            # Scale to [0.1, 0.9] to leave room for time penalty and success bonus
+            # This ensures we don't hit the bounds too often during normal operation
+            distance_reward = 0.1 + 0.8 * distance_reward
             
-            # Combine rewards
-            reward = distance_reward + progress_reward + movement_reward
+            # Small time penalty to encourage efficiency
+            time_penalty = 0.01
             
-            # Small penalty for time to encourage efficiency
-            reward -= 0.01
+            # Final reward bounded to [-1, 1]
+            reward = distance_reward - time_penalty
+            
+        # Ensure reward is strictly bounded to [-1, 1]
+        reward = np.clip(reward, -1.0, 1.0)
         
         # Episode is done if target is reached or max time exceeded
         done = (dist < self.success_threshold) or (self.env.get_sim_time() > max_time)
@@ -250,7 +296,7 @@ class HeadTouchEnv:
         info = {
             'dist': dist,
             'p_tip': p_tip,
-            'p_target': p_target
+            'p_target': self.p_target
         }
         
         return obs, reward, done, info
@@ -264,125 +310,31 @@ class HeadTouchEnv:
             except Exception as e:
                 print(f"Warning: Render failed: {e}")
     
-    def capture_frame(self):
-        """Capture current frame for video recording"""
-        if self.record_video:
-            try:
-                if hasattr(self, 'viewer_initialized') and self.viewer_initialized:
-                    # Use MuJoCo viewer if available
-                    self.env.render()
-                    img = self.env.grab_image(rsz_rate=0.5)
-                else:
-                    # Create a simple visualization frame
-                    img = self._create_visualization_frame()
-                
-                if img is not None and img.sum() > 0:
-                    self.frames.append(img.copy())
-                else:
-                    # Use backup image if current image is invalid
-                    self.frames.append(self.env.grab_image_backup.copy())
-            except Exception as e:
-                print(f"Warning: Failed to capture frame: {e}")
-                # Create a blank frame as fallback
-                blank_frame = np.zeros((400, 600, 3), dtype=np.uint8)
-                self.frames.append(blank_frame)
-    
-    def _create_visualization_frame(self):
-        """Create a visualization frame for headless rendering"""
-        try:
-            # Create a simple visualization using matplotlib
-            fig, ax = plt.subplots(figsize=(8, 6))
-            
-            # Get current positions
-            p_tip = self.env.get_p_body('applicator_tip')
-            p_target = self.env.get_p_body('target_dot')
-            p_head = self.env.get_p_body('obj_head')
-            
-            # Plot positions
-            ax.scatter([p_tip[0]], [p_tip[1]], c='red', s=100, label='Robot Tip')
-            ax.scatter([p_target[0]], [p_target[1]], c='green', s=100, label='Target')
-            ax.scatter([p_head[0]], [p_head[1]], c='blue', s=100, label='Head')
-            
-            # Draw line from tip to target
-            ax.plot([p_tip[0], p_target[0]], [p_tip[1], p_target[1]], 'k--', alpha=0.5)
-            
-            ax.set_xlabel('X (m)')
-            ax.set_ylabel('Y (m)')
-            ax.set_title('Robot Environment (Top View)')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            ax.set_aspect('equal')
-            
-            # Convert matplotlib figure to image
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-            buf.seek(0)
-            img = Image.open(buf)
-            img_array = np.array(img)
-            plt.close()
-            
-            # Convert RGBA to RGB if needed
-            if img_array.shape[2] == 4:
-                img_array = img_array[:, :, :3]
-            
-            return img_array
-            
-        except Exception as e:
-            print(f"Warning: Failed to create visualization frame: {e}")
-            return None
-    
-    def save_video(self, filename='training_video.mp4', fps=10):
-        """Save recorded frames as video"""
-        if not self.record_video or len(self.frames) == 0:
-            print("No frames to save")
-            return
-        
-        print(f"Saving video with {len(self.frames)} frames...")
-        
-        # Get frame dimensions
-        height, width = self.frames[0].shape[:2]
-        
-        # Create video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(filename, fourcc, fps, (width, height))
-        
-        # Write frames
-        for frame in self.frames:
-            # Convert RGB to BGR for OpenCV
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            out.write(frame_bgr)
-        
-        out.release()
-        print(f"Video saved as {filename}")
-        
-        # Clear frames to free memory
-        self.frames = []
-
 # PPO implementation
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim):
         super(ActorCritic, self).__init__()
         
-        # Shared layers
+        # Shared layers - SMALLER network to prevent overfitting
         self.shared = nn.Sequential(
-            nn.Linear(state_dim, 256),
+            nn.Linear(state_dim, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 64),
             nn.ReLU()
         )
         
         # Actor (policy) head
-        self.actor_mean = nn.Linear(256, action_dim)
+        self.actor_mean = nn.Linear(64, action_dim)
         self.actor_logstd = nn.Parameter(torch.zeros(action_dim))
         
         # Critic (value) head
-        self.critic = nn.Linear(256, 1)
+        self.critic = nn.Linear(64, 1)
         
     def forward(self, state):
         shared_features = self.shared(state)
         
-        # Actor
-        mean = self.actor_mean(shared_features)
+        # Actor - use tanh to bound actions to [-1, 1]
+        mean = torch.tanh(self.actor_mean(shared_features))
         std = torch.exp(self.actor_logstd)
         
         # Critic
@@ -396,14 +348,14 @@ class ActorCritic(nn.Module):
         return self.critic(shared_features)
 
 class PPO:
-    def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, epsilon=0.3):
+    def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, epsilon=0.3, exploration_noise=0.7, eps=1e-8):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")  # Show which device is being used
         self.actor_critic = ActorCritic(state_dim, action_dim).to(self.device)
-        self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=lr, eps=1e-8)
+        self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=lr, eps=eps)
         self.gamma = gamma
         self.epsilon = epsilon
-        self.exploration_noise = 1  # Add exploration noise
+        self.exploration_noise = exploration_noise  # Add exploration noise
         
     def select_action(self, state, exploration=True):
         # Add batch dimension
@@ -431,18 +383,20 @@ class PPO:
         # Create normal distribution
         dist = Normal(mean, std)
         
-        # Sample action
-        action = dist.sample()
+        # Sample action from unbounded distribution
+        unbounded_action = dist.sample()
         
-        # Clip actions to reasonable range
-        action = torch.clamp(action, -1.0, 1.0)
+        # Apply tanh to bound actions to [-1, 1]
+        action = torch.tanh(unbounded_action)
         
-        # Calculate log probability
-        log_prob = dist.log_prob(action).sum(dim=-1)
+        # Calculate log probability with tanh transformation correction
+        log_prob = dist.log_prob(unbounded_action).sum(dim=-1)
+        # Correct for tanh transformation: log_prob - log(1 - tanh^2(x))
+        log_prob -= torch.log(1 - action.pow(2) + 1e-6).sum(dim=-1)
         
         return action.squeeze(0).cpu().numpy(), log_prob.squeeze(0).detach().cpu().numpy()
     
-    def update(self, states, actions, rewards, log_probs, values, dones):
+    def update(self, states, actions, rewards, log_probs, values, dones, logging=True):
         # Convert to tensors
         states = torch.FloatTensor(np.array(states)).to(self.device)
         actions = torch.FloatTensor(np.array(actions)).to(self.device)
@@ -499,17 +453,41 @@ class PPO:
 
 def train(
     record_video: bool = False,
-    initial_joint_angles: list = [0, -60, 90, -60, -90, 0],
+    logging: bool = True,
+    initial_joint_angles: list = [0, -60, 120, 30, 0, 0],
     epsilon: float = 0.3,
     gamma: float = 0.99,
     lr: float = 3e-4,
-    n_episodes: int = 500,
+    n_episodes: int | None = 500,
     max_steps: int = 2000,
     batch_size: int = 64,
     waiting_time: float = 1.0,
-    joint_names: list = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+    exploration_noise: float = 0.7,
+    render_every: int = 50,
+    joint_names: list = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'],
+    head_position: list = [1, 0, 0.55],
+    max_exploration_rate: float = 1,
+    min_exploration_rate: float = 0.20,
+    decay_rate: float = 0.00005,
+    normalize_obs: bool = True
     ):
     """Train the PPO agent"""
+    if logging:
+        wandb.init(project="head-touch-ppo", name="head-touch-ppo")
+        wandb.config.update({
+            "epsilon": epsilon,
+            "gamma": gamma,
+            "lr": lr,
+            "exploration_noise": exploration_noise,
+            "batch_size": batch_size,
+            "max_steps": max_steps,
+            "waiting_time": waiting_time,
+            "max_exploration_rate": max_exploration_rate,
+            "min_exploration_rate": min_exploration_rate,
+            "decay_rate": decay_rate,
+            "normalize_obs": normalize_obs,
+        })
+
     print("Starting training")
     
     # Initialize environment
@@ -517,26 +495,34 @@ def train(
         name='ur5e_rg2',
         rel_xml_path='../asset/makeup_frida/scene_table.xml',
         verbose=True
-    ), record_video=record_video, initial_joint_angles=initial_joint_angles, waiting_time=waiting_time, joint_names=joint_names)
+    ), record_video=record_video, initial_joint_angles=initial_joint_angles, waiting_time=waiting_time, joint_names=joint_names, head_position=head_position, normalize_obs=normalize_obs)
     
     # Initialize PPO agent
     state_dim = head_touch_env.o_dim
     action_dim = head_touch_env.a_dim
-    ppo = PPO(state_dim, action_dim, epsilon=epsilon, gamma=gamma, lr=lr)    
+    ppo = PPO(state_dim, action_dim, epsilon=epsilon, gamma=gamma, lr=lr, exploration_noise=exploration_noise)    
     print(f"viewer_initialized: {head_touch_env.viewer_initialized}")
+    if logging:
+        wandb.watch(ppo.actor_critic, log="all")
     
     # Training loop
     episode_rewards = []
-    episode_lengths = []
+    successful_episodes = []  # Track which episodes were successful
     
-    for episode in range(n_episodes):
+    episode = 0
+    if n_episodes is None:
+        # Infinite training until success
+        episode_iterator = iter(lambda: episode, -1)  # This will never end
+        print("Training indefinitely until consistent success is achieved...")
+    else:
+        episode_iterator = trange(n_episodes)
+    
+    for episode_n in episode_iterator:
         obs = head_touch_env.reset()
-        episode_reward = 0
-        episode_length = 0
+        episode_reward = []
         states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
-        
-        # Add exploration decay - slower decay for better exploration
-        exploration_rate = max(0.3, 1.0 - episode / (n_episodes * 0.8))  # Slower decay, higher minimum
+        episode_success = False
+        exploration_rate = max_exploration_rate
         
         for step in range(max_steps):
             # Select action with exploration
@@ -545,10 +531,14 @@ def train(
             # Execute action
             next_obs, reward, done, info = head_touch_env.step(action)
             
-            # Render if video recording (every 10 steps to reduce load)
-            if record_video and step % 50 == 0:
+            if reward > 0.8:  # Adjusted for normalized rewards
+                exploration_rate = min_exploration_rate
+            else:
+                exploration_rate = max(min_exploration_rate, max_exploration_rate * (1 - (episode_n * decay_rate)))
+            # Render if video recording (every render_every steps to reduce load)
+            if record_video and step % render_every == 0:
                 head_touch_env.env.plot_sphere(p=head_touch_env.env.get_p_body('applicator_tip'), r=0.005, rgba=(1,0,1,1), label='Tip')
-                head_touch_env.env.plot_sphere(p=head_touch_env.env.get_p_body('target_dot'), r=0.005, rgba=(0,0,1,1), label='Target')
+                head_touch_env.env.plot_sphere(p=head_touch_env.p_target, r=0.005, rgba=(0,0,1,1), label='Target')
                 head_touch_env.env.render()
             
             # Store transition
@@ -560,34 +550,102 @@ def train(
             dones.append(done)
             
             obs = next_obs
-            episode_reward += reward
-            episode_length += 1
+            episode_reward.append(reward)
+            if logging:
+                wandb.log({
+                    "step": step,
+                    "reward": reward,
+                    "exploration_rate": exploration_rate,
+                    "episode_reward": sum(episode_reward),
+                    "episode_success": episode_success,
+                    "episode": episode,
+                    "max_reward": max(episode_reward)
+                })
             
-            # End episode if target is reached or time limit exceeded
+            # End episode if target is reached or max time exceeded
             if done:
+                episode_success = True
+                torch.save(ppo.actor_critic.state_dict(), f'ppo_model_{episode_n}.pth')
                 break
         
-        episode_rewards.append(episode_reward)
-        episode_lengths.append(episode_length)
+        # Track episode success and rewards
+        episode_rewards.append(sum(episode_reward))
+        successful_episodes.append(episode_success)
+        
+        # Calculate and log success metrics if logging is enabled
+        if logging:
+            # Calculate recent success rates
+            recent_window = 50
+            if len(successful_episodes) >= recent_window:
+                recent_success_rate = sum(successful_episodes[-recent_window:]) / recent_window
+            else:
+                recent_success_rate = sum(successful_episodes) / len(successful_episodes)
+            
+            # Calculate last 10 episodes success rate
+            if len(successful_episodes) >= 10:
+                last_10_success_rate = sum(successful_episodes[-10:]) / 10
+            else:
+                last_10_success_rate = sum(successful_episodes) / len(successful_episodes)
+            
+            wandb.log({
+                "episode_final_reward": sum(episode_reward),
+                "episode_success_final": episode_success,
+                "episode_number": episode + 1,
+                "total_successes": sum(successful_episodes),
+                "total_episodes": len(successful_episodes),
+                "overall_success_rate": sum(successful_episodes) / len(successful_episodes),
+                "recent_50_success_rate": recent_success_rate,
+                "last_10_success_rate": last_10_success_rate,
+                "exploration_rate_final": exploration_rate
+            })
         
         # Update policy more frequently - smaller batch size for more frequent updates
-        if len(states) >= batch_size // 2:  # Update with smaller batches
+        if len(states) >= batch_size:  # Update with smaller batches
             ppo.update(states, actions, rewards, log_probs, values, dones)
             # Clear buffer after update
             states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
-        
+
         # Print progress
-        if (episode + 1) % 10 == 0:
-            avg_reward = np.mean(episode_rewards[-10:])
-            avg_length = np.mean(episode_lengths[-10:])
-            print(f"Episode {episode + 1}/{n_episodes}, Avg Reward: {avg_reward:.2f}, Avg Length: {avg_length:.1f}, Exploration: {exploration_rate:.2f}")
+        print_every = 1
+        if (episode + 1) % print_every == 0:
+            max_reward = max(episode_reward) if episode_reward else 0
+            success_str = "SUCCESS" if episode_success else "FAILED"
+
+            # Calculate recent success rate
+            recent_window = 20  # Look at last 20 episodes
+            if len(successful_episodes) >= recent_window:
+                recent_successes = successful_episodes[-recent_window:]
+                success_rate = sum(recent_successes) / len(recent_successes)
+                success_rate_str = f"Success Rate: {success_rate:.1%}"
+            else:
+                success_rate_str = f"Success Rate: {sum(successful_episodes)}/{len(successful_episodes)}"
+
+            if n_episodes is None:
+                print(f"Episode {episode + 1}, Steps: {step + 1}, Max Reward: {max_reward:.2f}, {success_str}, Exploration: {exploration_rate:.2f}, {success_rate_str}")
+            else:
+                print(f"Episode {episode + 1}/{n_episodes}, Steps: {step + 1}, Max Reward: {max_reward:.2f}, {success_str}, Exploration: {exploration_rate:.2f}, {success_rate_str}")
+            episode_reward = []
         
-        # Early stopping if consistently successful
-        if len(episode_rewards) >= 50:
-            recent_rewards = episode_rewards[-50:]
-            if np.mean(recent_rewards) > 5.0 and np.std(recent_rewards) < 2.0:
-                print(f"Early stopping at episode {episode + 1} due to consistent success")
-                break
+        # Enhanced early stopping logic - only stop when consistently successful
+        if len(successful_episodes) >= 20:  # Need at least 20 episodes to evaluate
+            recent_successes = successful_episodes[-20:]  # Last 20 episodes
+            success_rate = sum(recent_successes) / len(recent_successes)
+            
+            # Stop only if more than half of recent episodes are successful
+            if success_rate > 0.5:  # More than 50% success rate
+                # Additional check: make sure we have enough consecutive successes
+                last_10_successes = successful_episodes[-10:]
+                last_10_success_rate = sum(last_10_successes) / len(last_10_successes)
+                
+                if last_10_success_rate >= 0.6:  # At least 60% success in last 10 episodes
+                    print(f"Early stopping at episode {episode + 1} due to consistent success!")
+                    print(f"Success rate in last 20 episodes: {success_rate:.1%}")
+                    print(f"Success rate in last 10 episodes: {last_10_success_rate:.1%}")
+                    break
+            
+        
+        # Increment episode counter for infinite training
+        episode += 1
     
     # Save model
     torch.save(ppo.actor_critic.state_dict(), 'ppo_model.pth')
@@ -600,16 +658,24 @@ def train(
     
     return ppo, episode_rewards
 
-def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5, initial_joint_angles=[0, -60, 90, -60, -90, 0], joint_names=['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']):
+def test_model(
+    checkpoint_path='ppo_model.pth', 
+    record_video=False, 
+    n_episodes=5, 
+    initial_joint_angles=[0, -60, 90, -60, -90, 0], 
+    joint_names=['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'], 
+    render_every=50,
+    normalize_obs=True
+    ):
     """Test a trained model with optional video recording"""
-    print(f"Testing model from {model_path}")
+    print(f"Testing model from {checkpoint_path}")
     
     # Initialize environment
     head_touch_env = HeadTouchEnv(env=MuJoCoParserClass(
         name='ur5e_rg2',
         rel_xml_path='../asset/makeup_frida/scene_table.xml',
         verbose=True
-    ), record_video=record_video, initial_joint_angles=initial_joint_angles, joint_names=joint_names)
+    ), record_video=record_video, initial_joint_angles=initial_joint_angles, joint_names=joint_names, normalize_obs=normalize_obs)
     
     # Load model
     state_dim = head_touch_env.o_dim
@@ -617,10 +683,10 @@ def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5, ini
     ppo = PPO(state_dim, action_dim)
     
     try:
-        ppo.actor_critic.load_state_dict(torch.load(model_path))
+        ppo.actor_critic.load_state_dict(torch.load(checkpoint_path, map_location=ppo.device))
         print("Model loaded successfully")
     except FileNotFoundError:
-        print(f"Model file {model_path} not found. Please train first.")
+        print(f"Model file {checkpoint_path} not found. Please train first.")
         return
     
     # Video recording setup - ONLY for testing
@@ -643,7 +709,7 @@ def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5, ini
     
     # Test episodes
     for episode in range(n_episodes):
-        obs = head_touch_env.reset(do_randomization=False)
+        obs = head_touch_env.reset()
         episode_reward = 0
         step_count = 0
         
@@ -651,14 +717,44 @@ def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5, ini
         
         while step_count < 1000:
             # Get action from model (no exploration during testing)
-            action, _ = ppo.select_action(obs, exploration=False)
+            try:
+                action, _ = ppo.select_action(obs, exploration=False)
+            except Exception as e:
+                print(f"Error in action selection: {e}")
+                break
             
             # Execute action
-            next_obs, reward, done, info = head_touch_env.step(action)
+            try:
+                next_obs, reward, done, info = head_touch_env.step(action)
+            except Exception as e:
+                print(f"Error in environment step: {e}")
+                break
             
-            # Render if video recording
-            if record_video and step_count % 5 == 0:
-                head_touch_env.env.render()
+            # Render if video recording - with error handling
+            if record_video and step_count % render_every == 0:
+                try:
+                    print(f"  Attempting to render at step {step_count}")
+                    # Get positions safely
+                    tip_pos = head_touch_env.env.get_p_body('applicator_tip')
+                    target_pos = head_touch_env.env.get_p_body('target_dot')
+                    
+                    print(f"  Tip position: {tip_pos}")
+                    print(f"  Target position: {target_pos}")
+                    
+                    # Try to plot spheres with error handling
+                    head_touch_env.env.plot_sphere(p=tip_pos, r=0.005, rgba=(1,0,1,1), label='Tip')
+                    head_touch_env.env.plot_sphere(p=target_pos, r=0.005, rgba=(0,0,1,1), label='Target')
+                    
+                    print(f"  Spheres plotted successfully")
+                    
+                    # Try to render
+                    head_touch_env.env.render()
+                    print(f"  Render completed successfully")
+                    
+                except Exception as e:
+                    print(f"  Warning: Render failed at step {step_count}: {e}")
+                    # Continue without rendering
+                    pass
             
             obs = next_obs
             episode_reward += reward
@@ -675,30 +771,45 @@ def test_model(model_path='ppo_model.pth', record_video=False, n_episodes=5, ini
     
     # Close viewer if it was opened
     if record_video and head_touch_env.viewer_initialized:
-        head_touch_env.env.close_viewer()
-        print("Test video recording completed")
+        try:
+            head_touch_env.env.close_viewer()
+            print("Test video recording completed")
+        except Exception as e:
+            print(f"Warning: Error closing viewer: {e}")
 
 def main(
-    record_video: bool = True,
     test_only: bool = False,
-    initial_joint_angles: list = [0, -60, 90, -60, -90, 0],
-    epsilon: float = 0.3,
-    gamma: float = 0.99,
-    lr: float = 3e-4,
+    logging: bool = True,
+    record_video: bool = False,
+    render_every: int = 50,
+    initial_joint_angles: list = [0, -30, 0, 30, 0, 30],
+    epsilon: float = 0.1,
+    gamma: float = 0.95,
+    lr: float = 1e-4,
     batch_size: int = 32,
-    max_steps: int = 2000,
-    n_episodes: int = 200,
+    max_steps: int = 1000,
+    n_episodes: int | None = None,
     waiting_time: float = 1.0,
-    joint_names: list = ['wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+    exploration_noise: float = 0.6,
+    # joint_names: list = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'],
+    joint_names: list = ['elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'],
+    head_position: list = [1, 0.1, 0.55],
+    checkpoint_path: str = 'ppo_model.pth',
+    normalize_obs: bool = True,
+    headless_test: bool = False
     ):
     """Main function to handle training and testing"""
     
     if test_only:
-        test_model(record_video=record_video, initial_joint_angles=initial_joint_angles, joint_names=joint_names)
+        if headless_test:
+            print("Running in headless test mode (no video/rendering)")
+            test_model(checkpoint_path=checkpoint_path, record_video=False, initial_joint_angles=initial_joint_angles, joint_names=joint_names, render_every=50, normalize_obs=normalize_obs)
+        else:
+            test_model(checkpoint_path=checkpoint_path, record_video=True, initial_joint_angles=initial_joint_angles, joint_names=joint_names, render_every=50, normalize_obs=normalize_obs)
     else:
-        # Training - NO GUI
         ppo, rewards = train(
             record_video=record_video,
+            logging=logging,
             n_episodes=n_episodes,
             max_steps=max_steps,
             batch_size=batch_size,
@@ -708,10 +819,19 @@ def main(
             lr=lr,
             waiting_time=waiting_time,
             joint_names=joint_names,
+            exploration_noise=exploration_noise,
+            render_every=render_every,
+            head_position=head_position,
+            normalize_obs=normalize_obs,
         )
         
-        # Test with GUI if video mode or record_video is True
-        test_model(record_video=True, n_episodes=3, initial_joint_angles=initial_joint_angles, joint_names=joint_names)
+        if headless_test:
+            print("Running post-training test in headless mode")
+            test_model(checkpoint_path=checkpoint_path, record_video=False, n_episodes=3, initial_joint_angles=initial_joint_angles, joint_names=joint_names, render_every=50, normalize_obs=normalize_obs)
+        else:
+            test_model(checkpoint_path=checkpoint_path, record_video=True, n_episodes=3, initial_joint_angles=initial_joint_angles, joint_names=joint_names, render_every=50, normalize_obs=normalize_obs)
+
+
 
 if __name__ == "__main__":
     import fire

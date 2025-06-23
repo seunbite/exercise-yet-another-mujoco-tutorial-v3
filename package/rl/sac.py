@@ -13,7 +13,7 @@ def list2torch(x,device):
     return torch.tensor(np.array(x),dtype=torch.float).to(device)
 
 # Replay buffer
-class ReplafyBufferClass():
+class ReplayBufferClass():
     """
         Replay buffer
     """
