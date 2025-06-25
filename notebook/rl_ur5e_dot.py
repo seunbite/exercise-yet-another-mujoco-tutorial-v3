@@ -1041,4 +1041,5 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
 
 
 if __name__ == "__main__":
-    import fire ; fire.Fire(train_ur5e_sac)
+    import fire
+    fire.Fire(train_ur5e_sac)

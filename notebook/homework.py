@@ -356,6 +356,34 @@ class PPO:
         self.gamma = gamma
         self.epsilon = epsilon
         self.exploration_noise = exploration_noise  # Add exploration noise
+    
+    def calculate_detailed_gradient_norms(self):
+        """Calculate gradient norms for different parts of the network"""
+        total_norm = 0.0
+        actor_norm = 0.0
+        critic_norm = 0.0
+        layer_norms = {}
+        
+        # Calculate gradient norms for each layer
+        for name, param in self.actor_critic.named_parameters():
+            if param.grad is not None:
+                param_norm = param.grad.data.norm(2)
+                layer_norms[f'grad_norm_{name}'] = param_norm.item()
+                total_norm += param_norm.item() ** 2
+                
+                # Categorize by actor/critic
+                if any(keyword in name.lower() for keyword in ['actor', 'mean', 'std']):
+                    actor_norm += param_norm.item() ** 2
+                elif any(keyword in name.lower() for keyword in ['critic', 'value']):
+                    critic_norm += param_norm.item() ** 2
+        
+        result = {
+            'gradient_norm_total': total_norm ** 0.5,
+            'gradient_norm_actor': actor_norm ** 0.5,
+            'gradient_norm_critic': critic_norm ** 0.5
+        }
+        result.update(layer_norms)
+        return result
         
     def select_action(self, state, exploration=True):
         # Add batch dimension
@@ -423,7 +451,7 @@ class PPO:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         # PPO update
-        for _ in range(10):  # Multiple epochs
+        for epoch in range(10):  # Multiple epochs
             mean, std, value = self.actor_critic(states)
             dist = Normal(mean, std)
             new_log_probs = dist.log_prob(actions).sum(dim=-1)
@@ -447,7 +475,20 @@ class PPO:
             # Update
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), 0.5)
+            
+            # Calculate gradient norm before clipping
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), 0.5)
+            
+            # Log gradient norm to wandb (only on last epoch to avoid spam)
+            if logging and epoch == 9:  # Log only on the last epoch
+                import wandb
+                wandb.log({
+                    "gradient_norm": grad_norm.item(),
+                    "actor_loss": actor_loss.item(),
+                    "critic_loss": critic_loss.item(),
+                    "total_loss": loss.item()
+                })
+            
             self.optimizer.step()
 
 
