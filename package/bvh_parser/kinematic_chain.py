@@ -328,7 +328,6 @@ class KinematicChainClass(object):
         """ 
             Plot chain in MuJoCo
         """
-        
         # Plot link
         if plot_link:
             for idx,edge in enumerate(dfs_edges(self.chain,source=0)):
