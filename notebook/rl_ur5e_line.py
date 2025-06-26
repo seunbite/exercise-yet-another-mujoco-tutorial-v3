@@ -38,7 +38,7 @@ class UR5eHeadTouchEnv:
             head_position=[1, 0.0, 0.53], 
             waiting_time=0.0, 
             normalize_obs=True, 
-            normalize_reward=True, 
+            normalize_reward=False, 
             ):
         self.env = env
         self.HZ = HZ
@@ -82,7 +82,7 @@ class UR5eHeadTouchEnv:
         
         self.start_reached = False
         self.end_reached = False
-        self.touch_threshold = 0.005
+        self.touch_threshold = 0.01
         
         self.obs_mean = None
         self.obs_std = None
@@ -170,6 +170,8 @@ class UR5eHeadTouchEnv:
             qpos,
             qvel,
             tip_pos,
+            np.array([int(self.start_reached)]),
+            np.array([int(self.end_reached)]),
             base_table_pos,
             start_point,
             end_point,
@@ -257,38 +259,43 @@ class UR5eHeadTouchEnv:
         done = SUCCESS or TIMEOUT or JOINT_LIMIT_VIOLATION
         r_START_TOUCH = 0.5
         r_END_TOUCH = 1
-        r_TIME = -0.001
+        r_TIME = -0.00001
         w_START_TOUCH = -0.2
-        w_END_TOUCH = -0.2
+        w_END_TOUCH = -0.02
         w_LINE_DEV = -0.01
 
         reward = 0.0
         r_start_distance = 0.0
         r_in_progress = 0.0
+        r_line_dev = 0.0
+        stop_rewarding = False
         
         if not self.start_reached:
             delta_d = current_distance_start
             r_start_distance = delta_d * w_START_TOUCH
             
             if current_distance_start < self.touch_threshold:
-                self.start_reached = True
                 print("Start point reached!")
+                self.start_reached = True
+                reward += r_START_TOUCH
+                stop_rewarding = True
             
-        if self.start_reached and not self.end_reached:
-            reward += r_START_TOUCH
+        if self.start_reached and not self.end_reached and not stop_rewarding:
             delta_d = current_distance_end
             delta_l = self._get_distance_from_line()
-            r_in_progress = delta_d * w_END_TOUCH + delta_l * w_LINE_DEV
+            r_in_progress = delta_d * w_END_TOUCH
+            r_line_dev = delta_l * w_LINE_DEV
 
             if current_distance_end < self.touch_threshold:
                 self.end_reached = True
                 reward += r_END_TOUCH
+                print("End point reached!")
         
-        reward += r_start_distance + r_in_progress + r_TIME
-    
+        reward += r_start_distance + r_in_progress + r_line_dev + r_TIME
+        
         if self.normalize_reward:
             reward = self._normalize_reward(reward)
-
+        
         self.reward_count += 1
         self.reward_mean = (self.reward_mean * (self.reward_count - 1) + reward) / self.reward_count
         self.reward_std = np.sqrt((self.reward_std ** 2 * (self.reward_count - 1) + (reward - self.reward_mean) ** 2) / self.reward_count)
@@ -349,7 +356,7 @@ class UR5eHeadTouchEnv:
         # self.env.set_p_base_body(body_name='obj_head', p=self.head_position)
         # self.env.set_R_base_body(body_name='obj_head', R=rpy2r(np.radians([90, 0, 270])))
         
-        self.target_pos_start = self._dynamic_target(self.head_position, x=[0.03, 0.03], y=[-0.2, 0.2], z=[-0.05, 0.05])
+        self.target_pos_start = self._dynamic_target(self.head_position, x=[0.03, 0.03], y=[-0.2, 0.2], z=[0.10, 0.15])
         
         line_length = random.uniform(0.1, 0.3)
         z_offset = np.random.uniform(0.05, 0.15) * np.random.choice([-1, 1])
@@ -461,7 +468,7 @@ def train_ur5e_sac(
     result_path=None,
     do_render=False,
     do_log=True,
-    n_episode=1000,
+    n_episode=500,
     max_epi_sec=5.0,
     n_warmup_epi=10,
     buffer_limit=50000,
@@ -481,6 +488,7 @@ def train_ur5e_sac(
     seed=0,
     ):
     now_date = strftime("%Y-%m-%d")
+    now_time = strftime("%H-%M-%S")
     if result_path is None:
         result_path = f'./result/weights/{now_date}_sac_ur5e/'
 
@@ -492,7 +500,7 @@ def train_ur5e_sac(
         for pth_file in all_pth_files:
             print(f"   - {pth_file}")
         
-        env = MuJoCoParserClass(name='UR5e', rel_xml_path=xml_path, verbose=False)
+        env = MuJoCoParserClass(name=f'UR5e', rel_xml_path=xml_path, verbose=False)
         gym = UR5eHeadTouchEnv(env=env, HZ=50)
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
@@ -540,7 +548,7 @@ def train_ur5e_sac(
     print(f"Rendering enabled: {do_render}")
     buffer_warmup=buffer_limit // 5
 
-    env = MuJoCoParserClass(name='UR5e', rel_xml_path=xml_path, verbose=True)
+    env = MuJoCoParserClass(name=f'UR5e_{now_time}', rel_xml_path=xml_path, verbose=True)
     gym = UR5eHeadTouchEnv(env=env, HZ=50)
     max_epi_tick=int(max_epi_sec * gym.HZ)
     
@@ -695,7 +703,7 @@ def train_ur5e_sac(
             start_distance = info['distance_start']
             end_distance = info['distance_end']
             final_reward = reward
-            print(f"[{epi_idx}/{n_episode}] final_reward: [{final_reward:.3f}] sum_reward:[{reward_total:.2f}] start_distance:[{start_distance:.3f}] end_distance:[{end_distance:.3f}] epi_len:[{tick}/{max_epi_tick}] buffer_size:[{replay_buffer.size()}] alpha:[{actor.log_alpha.exp():.2f}]")
+            print(f"[{epi_idx}/{n_episode}] final_reward: [{final_reward:.3f}] start: [{info['start_reached']}] end: [{info['end_reached']}] sum_reward:[{reward_total:.2f}] start_distance:[{start_distance:.3f}] end_distance:[{end_distance:.3f}] epi_len:[{tick}/{max_epi_tick}] buffer_size:[{replay_buffer.size()}] alpha:[{actor.log_alpha.exp():.2f}]")
         
 
         if (epi_idx % eval_every) == 0 and epi_idx > 0:

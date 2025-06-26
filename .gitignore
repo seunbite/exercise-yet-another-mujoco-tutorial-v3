@@ -5,6 +5,7 @@ __pycache__/
 */ppo_model.pth
 */wandb/*
 */result/*
+*/temp_mocap/*
 import json
 
 def sample_json(filename, sample_size):
