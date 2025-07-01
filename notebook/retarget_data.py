@@ -364,8 +364,8 @@ def run(
     
     os.makedirs(output_dir, exist_ok=True)
     if os.path.exists(frames_dir):
-        for i in os.listdir(frames_dir):
-            os.remove(os.path.join(frames_dir, i))
+    for i in os.listdir(frames_dir):
+        os.remove(os.path.join(frames_dir, i))
     os.makedirs(frames_dir, exist_ok=True)
     os.makedirs(bvh_dir, exist_ok=True)
     if create_visualization:
