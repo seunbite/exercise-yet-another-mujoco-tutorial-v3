@@ -13,11 +13,11 @@ def get_T_joi_from_chain_cmu(chain,hip_between_pelvis=True):
 
     p_rs,R_rs = chain.get_joint_pR(joint_name='RightArm')
     p_re,R_re = chain.get_joint_pR(joint_name='RightForeArm')
-    p_rw,R_rw = chain.get_joint_pR(joint_name='RightHand')
+    p_rw,R_rw = chain.get_joint_pR(joint_name='RightForeArm')  # Use RightForeArm instead of RightHand
 
     p_ls,R_ls = chain.get_joint_pR(joint_name='LeftArm')
     p_le,R_le = chain.get_joint_pR(joint_name='LeftForeArm')
-    p_lw,R_lw = chain.get_joint_pR(joint_name='LeftHand')
+    p_lw,R_lw = chain.get_joint_pR(joint_name='LeftForeArm')  # Use LeftForeArm instead of LeftHand
 
     p_neck,R_neck = chain.get_joint_pR(joint_name='Neck')
     p_neck_z = 0.5*(p_rs+p_ls) # z neck position to be the center of two shoulder positions
@@ -33,8 +33,8 @@ def get_T_joi_from_chain_cmu(chain,hip_between_pelvis=True):
     p_lk,R_lk = chain.get_joint_pR(joint_name='LeftLeg')
     p_la,R_la = chain.get_joint_pR(joint_name='LeftFoot')
 
-    p_r_toe,R_r_toe = chain.get_joint_pR(joint_name='RightToeBase')
-    p_l_toe,R_l_toe = chain.get_joint_pR(joint_name='LeftToeBase')
+    p_r_toe,R_r_toe = chain.get_joint_pR(joint_name='RightFoot')  # Use RightFoot instead of RightToeBase
+    p_l_toe,R_l_toe = chain.get_joint_pR(joint_name='LeftFoot')  # Use LeftFoot instead of LeftToeBase
 
     # Modify Hip positions
     

@@ -581,6 +581,82 @@ class UR5eHeadTouchEnv:
         }
         
         return reward, reward_components
+    
+    def reward_5(self, applicator_tip_pos, current_distance_start, current_distance_end):
+        r_START_TOUCH = 0
+        r_END_TOUCH = 100
+        r_TIME = -0.0001
+        c_START_TOUCH = 0.0
+        w_START_TOUCH = -2
+        w_BINARY_LINE_DEVIATION = 1.0  # Weight for binary line deviation reward
+        line_success_threshold = 0.02  # Threshold for being "on the line" (2cm)
+        distance_reward_max = 2.0  # Maximum distance reward when at start point
+
+        reward = 0.0
+        r_start_distance = 0.0
+        r_distance_progress = 0.0
+        r_binary_line_deviation = 0.0
+        stop_rewarding = False
+
+        if not self.start_reached:
+            delta_d = current_distance_start
+            r_start_distance = delta_d * w_START_TOUCH + c_START_TOUCH
+            
+            if current_distance_start < self.touch_threshold:
+                print("Start point reached!")
+                self.start_reached = True
+                reward += r_START_TOUCH
+                stop_rewarding = True
+            
+        if self.start_reached and not self.end_reached and not stop_rewarding:
+            # Calculate position along the line using projection
+            start_point = self.target_line[0]
+            end_point = self.target_line[1]
+            line_vector = end_point - start_point
+            line_length_squared = np.dot(line_vector, line_vector)
+            
+            if line_length_squared > 1e-6:
+                # Project tip position onto the line
+                tip_vector = applicator_tip_pos - start_point
+                projection_scalar = np.dot(tip_vector, line_vector) / line_length_squared
+                
+                # Distance reward based on position along the line
+                if projection_scalar < 0:
+                    # Before start point (over the start point)
+                    r_distance_progress = -0.5
+                elif projection_scalar > 1:
+                    # After end point (over the end point)
+                    r_distance_progress = 0.0
+                else:
+                    # Between start and end point - linear interpolation
+                    # At start (projection_scalar = 0): distance_reward_max
+                    # At end (projection_scalar = 1): 0
+                    r_distance_progress = distance_reward_max * (1 - projection_scalar)
+            else:
+                r_distance_progress = 0.0
+            
+            # Binary line deviation reward (1 if on line, 0 if not)
+            line_deviation = self._get_distance_from_line()
+            if line_deviation <= line_success_threshold:
+                r_binary_line_deviation = w_BINARY_LINE_DEVIATION  # Reward for being on the line
+            else:
+                r_binary_line_deviation = 0.0  # No reward for being off the line
+            
+            if current_distance_end < self.touch_threshold:
+                self.end_reached = True
+                reward += r_END_TOUCH
+                print("End point reached!")
+        
+        reward += r_start_distance + r_distance_progress + r_TIME + r_binary_line_deviation
+
+        reward_components = {
+            'r_time': r_TIME,
+            'r_start_distance': r_start_distance,
+            'r_distance_progress': r_distance_progress,
+            'r_binary_line_deviation': r_binary_line_deviation,
+        }
+        
+        return reward, reward_components
 
     def compute_reward(self, action, max_time=np.inf):
         applicator_tip_pos = self.get_applicator_tip_pos()
@@ -610,6 +686,8 @@ class UR5eHeadTouchEnv:
             reward, reward_components = self.reward_3(applicator_tip_pos, current_distance_start, current_distance_end)
         elif str(self.reward_mode) == '4':
             reward, reward_components = self.reward_4(applicator_tip_pos, current_distance_start, current_distance_end)
+        elif str(self.reward_mode) == '5':
+            reward, reward_components = self.reward_5(applicator_tip_pos, current_distance_start, current_distance_end)
         else:
             raise ValueError(f"Invalid reward mode: {self.reward_mode}")
         
