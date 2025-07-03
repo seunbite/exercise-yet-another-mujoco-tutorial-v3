@@ -613,25 +613,25 @@ class UR5eHeadTouchEnv:
             start_point = self.target_line[0]
             end_point = self.target_line[1]
             line_vector = end_point - start_point
-            line_length_squared = np.dot(line_vector, line_vector)
+            line_length = np.linalg.norm(line_vector)
             
-            if line_length_squared > 1e-6:
-                # Project tip position onto the line
+            if line_length > 1e-6:
+                # Project tip position onto the line to determine zone
                 tip_vector = applicator_tip_pos - start_point
-                projection_scalar = np.dot(tip_vector, line_vector) / line_length_squared
+                projection_scalar = np.dot(tip_vector, line_vector) / (line_length ** 2)
                 
-                # Distance reward based on position along the line
+                # Zone-based distance reward using perpendicular lines
                 if projection_scalar < 0:
-                    # Before start point (over the start point)
+                    # Zone 1: Over start point (before start perpendicular line)
                     r_distance_progress = -0.5
                 elif projection_scalar > 1:
-                    # After end point (over the end point)
+                    # Zone 3: Over end point (after end perpendicular line)
                     r_distance_progress = 0.0
                 else:
-                    # Between start and end point - linear interpolation
-                    # At start (projection_scalar = 0): distance_reward_max
-                    # At end (projection_scalar = 1): 0
-                    r_distance_progress = distance_reward_max * (1 - projection_scalar)
+                    # Zone 2: Between start and end perpendicular lines
+                    # Linear reward based on proximity to end point
+                    # proximity_to_end = projection_scalar (0 at start, 1 at end)
+                    r_distance_progress = projection_scalar * distance_reward_max
             else:
                 r_distance_progress = 0.0
             
