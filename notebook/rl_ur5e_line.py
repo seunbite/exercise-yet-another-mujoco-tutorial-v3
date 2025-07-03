@@ -335,6 +335,94 @@ class UR5eHeadTouchEnv:
         
         return reward, reward_components
     
+    def reward_1_5(self, applicator_tip_pos, current_distance_start, current_distance_end):
+        r_START_TOUCH = 0
+        r_END_TOUCH = 100
+        r_TIME = -0.00001
+        c_START_TOUCH = 0.0
+        w_START_TOUCH = -0.2
+        w_DISTANCE_IMPROVEMENT = 2.0  # Positive weight for distance improvement
+        w_DIRECTIONAL_MOVEMENT = 1.0  # Positive weight for directional movement
+        w_STAY_STILL_PENALTY = -0.01  # Penalty for staying still after start reached
+        stay_still_threshold = 0.001  # Threshold for considering "staying still" (1mm)
+
+        reward = 0.0
+        r_start_distance = 0.0
+        r_in_progress = 0.0
+        r_line_dev = 0.0
+        r_directional_movement = 0.0
+        r_stay_still_penalty = 0.0
+        stop_rewarding = False
+        
+        if not self.start_reached:
+            delta_d = current_distance_start
+            r_start_distance = delta_d * w_START_TOUCH + c_START_TOUCH
+            
+            if current_distance_start < self.touch_threshold:
+                print("Start point reached!")
+                self.start_reached = True
+                reward += r_START_TOUCH
+                stop_rewarding = True
+            
+        if self.start_reached and not self.end_reached and not stop_rewarding:
+            # Initialize tracking variables if first time after start_reached
+            if self.prev_tip_pos is None:
+                self.prev_tip_pos = applicator_tip_pos.copy()
+                self.prev_distance_to_end = current_distance_end
+                self.still_counter = 0  # Counter for consecutive still steps
+            
+            # Calculate movement vector and direction
+            movement_vector = applicator_tip_pos - self.prev_tip_pos
+            movement_magnitude = np.linalg.norm(movement_vector)
+            
+            # Line direction (from start to end)
+            line_direction = self.target_line[1] - self.target_line[0]
+            
+            # r_directional_movement: positive reward for moving in line direction
+            r_directional_movement = 0.0
+            if movement_magnitude > 1e-6 and self.target_line_length > 1e-6:
+                movement_dir_normalized = movement_vector / movement_magnitude
+                line_dir_normalized = line_direction / self.target_line_length
+                direction_alignment = np.dot(movement_dir_normalized, line_dir_normalized)
+                # Positive reward when aligned with line direction (0 to w_DIRECTIONAL_MOVEMENT)
+                r_directional_movement = max(0, direction_alignment) * w_DIRECTIONAL_MOVEMENT
+            
+            # r_in_progress: positive reward for getting closer to end point
+            distance_improvement = self.prev_distance_to_end - current_distance_end
+            r_in_progress = max(0, distance_improvement) * w_DISTANCE_IMPROVEMENT  # Only positive when getting closer
+            
+            # Check if staying still and apply exponential penalty
+            if movement_magnitude < stay_still_threshold:
+                self.still_counter += 1
+                # Exponential penalty that increases with consecutive still steps
+                r_stay_still_penalty = w_STAY_STILL_PENALTY * (1.5 ** self.still_counter)
+            else:
+                self.still_counter = 0  # Reset counter when moving
+                r_stay_still_penalty = 0.0
+            
+            # Update tracking variables
+            self.prev_tip_pos = applicator_tip_pos.copy()
+            self.prev_distance_to_end = current_distance_end
+            
+            r_line_dev = 0.0
+            
+            if current_distance_end < self.touch_threshold:
+                self.end_reached = True
+                reward += r_END_TOUCH
+                print("End point reached!")
+        
+        reward += r_start_distance + r_in_progress + r_line_dev + r_TIME + r_directional_movement + r_stay_still_penalty
+
+        reward_components = {
+            'r_time': r_TIME,
+            'r_start_distance': r_start_distance,
+            'r_in_progress': r_in_progress,
+            'r_directional_movement': r_directional_movement,
+            'r_stay_still_penalty': r_stay_still_penalty,
+        }
+        
+        return reward, reward_components
+    
     def reward_2(self, applicator_tip_pos, current_distance_start, current_distance_end):
         r_START_TOUCH = 0
         r_END_TOUCH = 100
@@ -401,8 +489,8 @@ class UR5eHeadTouchEnv:
         r_END_TOUCH = 100
         r_TIME = -0.0001
         w_START_TOUCH = -2
-        w_DISTANCE_IMPROVEMENT = -0.1
-        w_LINE_DEVIATION = -0.01  # Weight for line deviation penalty
+        w_DISTANCE_IMPROVEMENT = -0.05
+        w_LINE_DEVIATION = -0.0001  # Weight for line deviation penalty
 
         reward = 0.0
         r_start_distance = 0.0
@@ -441,6 +529,58 @@ class UR5eHeadTouchEnv:
         }
         
         return reward, reward_components
+    
+    def reward_4(self, applicator_tip_pos, current_distance_start, current_distance_end):
+        r_START_TOUCH = 0
+        r_END_TOUCH = 100
+        r_TIME = -0.0001
+        c_START_TOUCH = 0.0
+        w_START_TOUCH = -2
+        w_DISTANCE_IMPROVEMENT = -0.05
+        w_BINARY_LINE_DEVIATION = 1.0  # Weight for binary line deviation reward
+        line_success_threshold = 0.02  # Threshold for being "on the line" (2cm)
+
+        reward = 0.0
+        r_start_distance = 0.0
+        r_in_progress = 0.0
+        r_binary_line_deviation = 0.0  # Binary reward for being on line
+        stop_rewarding = False
+
+        if not self.start_reached:
+            delta_d = current_distance_start
+            r_start_distance = delta_d * w_START_TOUCH + c_START_TOUCH
+            
+            if current_distance_start < self.touch_threshold:
+                print("Start point reached!")
+                self.start_reached = True
+                reward += r_START_TOUCH
+                stop_rewarding = True
+            
+        if self.start_reached and not self.end_reached and not stop_rewarding:
+            r_in_progress = current_distance_end * w_DISTANCE_IMPROVEMENT
+            
+            # Calculate binary line deviation reward (1 if on line, 0 if not)
+            line_deviation = self._get_distance_from_line()
+            if line_deviation <= line_success_threshold:
+                r_binary_line_deviation = w_BINARY_LINE_DEVIATION  # Reward for being on the line
+            else:
+                r_binary_line_deviation = 0.0  # No reward for being off the line
+            
+            if current_distance_end < self.touch_threshold:
+                self.end_reached = True
+                reward += r_END_TOUCH
+                print("End point reached!")
+        
+        reward += r_start_distance + r_in_progress + r_TIME + r_binary_line_deviation
+
+        reward_components = {
+            'r_time': r_TIME,
+            'r_start_distance': r_start_distance,
+            'r_in_progress': r_in_progress,
+            'r_binary_line_deviation': r_binary_line_deviation,
+        }
+        
+        return reward, reward_components
 
     def compute_reward(self, action, max_time=np.inf):
         applicator_tip_pos = self.get_applicator_tip_pos()
@@ -462,10 +602,14 @@ class UR5eHeadTouchEnv:
 
         if str(self.reward_mode) == '1':
             reward, reward_components = self.reward_1(applicator_tip_pos, current_distance_start, current_distance_end)
+        elif str(self.reward_mode) == '1.5':
+            reward, reward_components = self.reward_1_5(applicator_tip_pos, current_distance_start, current_distance_end)
         elif str(self.reward_mode) == '2':
             reward, reward_components = self.reward_2(applicator_tip_pos, current_distance_start, current_distance_end)
         elif str(self.reward_mode) == '3':
             reward, reward_components = self.reward_3(applicator_tip_pos, current_distance_start, current_distance_end)
+        elif str(self.reward_mode) == '4':
+            reward, reward_components = self.reward_4(applicator_tip_pos, current_distance_start, current_distance_end)
         else:
             raise ValueError(f"Invalid reward mode: {self.reward_mode}")
         
@@ -566,6 +710,7 @@ class UR5eHeadTouchEnv:
         self.prev_distance_to_end = self.get_distance(self.target_pos_start, self.target_line[1])
         
         self.prev_qpos = None
+        self.still_counter = 0  # Reset still counter for each episode
         self.obs_mean = None
         self.obs_std = None
         self.obs_count = 0
@@ -682,13 +827,13 @@ def train_ur5e_sac(
     xml_path='../asset/makeup_frida/scene_table.xml',
     what_changed='',
     test_only=False,
-    start_reached=True,
+    start_reached=False,
     n_test_episodes=3,
     result_path=None,
     do_render=True,
     do_log=True,
-    reward_mode='1',
-    n_episode=1000,
+    reward_mode='4',
+    n_episode=1500,
     max_epi_sec=5.0,
     n_warmup_epi=10,
     buffer_limit=50000,
@@ -704,6 +849,7 @@ def train_ur5e_sac(
     print_every=1,
     save_every_episode=50,
     seed=0,
+    train_from_checkpoint=None,
     ):
     now_date = strftime("%Y-%m-%d")
     now_time = strftime("%H-%M-%S")
@@ -817,6 +963,71 @@ def train_ur5e_sac(
     critic_one_trgt = CriticClass(**critic_arg).to(device)
     critic_two_trgt = CriticClass(**critic_arg).to(device)
     
+    # Load checkpoint if specified
+    start_episode = 0
+    if train_from_checkpoint is not None:
+        if os.path.exists(train_from_checkpoint):
+            print(f"Loading checkpoint from: {train_from_checkpoint}")
+            try:
+                checkpoint = torch.load(train_from_checkpoint, map_location=device)
+                
+                # Load actor state
+                if isinstance(checkpoint, dict) and 'actor_state_dict' in checkpoint:
+                    # Full checkpoint with multiple components
+                    actor.load_state_dict(checkpoint['actor_state_dict'])
+                    if 'critic_one_state_dict' in checkpoint:
+                        critic_one.load_state_dict(checkpoint['critic_one_state_dict'])
+                    if 'critic_two_state_dict' in checkpoint:
+                        critic_two.load_state_dict(checkpoint['critic_two_state_dict'])
+                    if 'critic_one_trgt_state_dict' in checkpoint:
+                        critic_one_trgt.load_state_dict(checkpoint['critic_one_trgt_state_dict'])
+                    if 'critic_two_trgt_state_dict' in checkpoint:
+                        critic_two_trgt.load_state_dict(checkpoint['critic_two_trgt_state_dict'])
+                    if 'episode' in checkpoint:
+                        start_episode = checkpoint['episode']
+                        print(f"Resuming from episode: {start_episode}")
+                    
+                    # Load optimizer states (will be set after optimizers are created)
+                    loaded_optimizers = {}
+                    if 'actor_optimizer_state_dict' in checkpoint and checkpoint['actor_optimizer_state_dict'] is not None:
+                        loaded_optimizers['actor'] = checkpoint['actor_optimizer_state_dict']
+                    if 'alpha_optimizer_state_dict' in checkpoint and checkpoint['alpha_optimizer_state_dict'] is not None:
+                        loaded_optimizers['alpha'] = checkpoint['alpha_optimizer_state_dict']
+                    if 'critic_one_optimizer_state_dict' in checkpoint and checkpoint['critic_one_optimizer_state_dict'] is not None:
+                        loaded_optimizers['critic_one'] = checkpoint['critic_one_optimizer_state_dict']
+                    if 'critic_two_optimizer_state_dict' in checkpoint and checkpoint['critic_two_optimizer_state_dict'] is not None:
+                        loaded_optimizers['critic_two'] = checkpoint['critic_two_optimizer_state_dict']
+                    
+                    # Store for later loading after optimizers are initialized
+                    actor._loaded_optimizer_states = loaded_optimizers
+                    
+                    print("Loaded full checkpoint with model states and optimizers")
+                else:
+                    # Simple checkpoint with just actor state_dict
+                    actor.load_state_dict(checkpoint)
+                    
+                    # Try to extract episode number from filename
+                    filename = os.path.basename(train_from_checkpoint)
+                    if 'episode_' in filename:
+                        try:
+                            start_episode = int(filename.split('episode_')[-1].split('.')[0])
+                            print(f"Extracted episode number from filename: {start_episode}")
+                        except:
+                            print("Could not extract episode number from filename")
+                    
+                    print("Loaded simple checkpoint with actor state only")
+                
+                print("Checkpoint loaded successfully!")
+                
+            except Exception as e:
+                print(f"Error loading checkpoint: {e}")
+                print("Starting training from scratch...")
+                start_episode = 0
+        else:
+            print(f"Checkpoint file not found: {train_from_checkpoint}")
+            print("Starting training from scratch...")
+            start_episode = 0
+    
     if do_log:
         import wandb
         wandb.init(project="ur5e-head-touch", name=f"{strftime('%Y-%m-%d_%H-%M-%S')}")
@@ -836,11 +1047,41 @@ def train_ur5e_sac(
         })
         wandb.watch(actor, log="all")
         
-    critic_one_trgt.load_state_dict(critic_one.state_dict())
-    critic_two_trgt.load_state_dict(critic_two.state_dict())
+    # Initialize target networks (only if not loaded from full checkpoint)
+    if not (hasattr(actor, '_loaded_optimizer_states') and 
+            'critic_one_trgt_state_dict' in str(train_from_checkpoint) if train_from_checkpoint else False):
+        critic_one_trgt.load_state_dict(critic_one.state_dict())
+        critic_two_trgt.load_state_dict(critic_two.state_dict())
+    
+    # Load optimizer states if available from checkpoint
+    if hasattr(actor, '_loaded_optimizer_states'):
+        loaded_optimizers = actor._loaded_optimizer_states
+        try:
+            if 'actor' in loaded_optimizers and hasattr(actor, 'optimizer'):
+                actor.optimizer.load_state_dict(loaded_optimizers['actor'])
+                print("Loaded actor optimizer state")
+            if 'alpha' in loaded_optimizers and hasattr(actor, 'alpha_optimizer'):
+                actor.alpha_optimizer.load_state_dict(loaded_optimizers['alpha'])
+                print("Loaded alpha optimizer state")
+            if 'critic_one' in loaded_optimizers and hasattr(critic_one, 'optimizer'):
+                critic_one.optimizer.load_state_dict(loaded_optimizers['critic_one'])
+                print("Loaded critic_one optimizer state")
+            if 'critic_two' in loaded_optimizers and hasattr(critic_two, 'optimizer'):
+                critic_two.optimizer.load_state_dict(loaded_optimizers['critic_two'])
+                print("Loaded critic_two optimizer state")
+        except Exception as e:
+            print(f"Warning: Could not load optimizer states: {e}")
+        
+        # Clean up temporary attribute
+        delattr(actor, '_loaded_optimizer_states')
     
     print("Starting training...")
-    print(f"Episodes: {n_episode}, Max episode time: {max_epi_sec}s")
+    end_episode = start_episode + n_episode
+    if start_episode > 0:
+        print(f"Resuming from episode {start_episode}, will train for {n_episode} more episodes (until episode {end_episode})")
+    else:
+        print(f"Training from scratch for {n_episode} episodes")
+    print(f"Max episode time: {max_epi_sec}s")
     print(f"Buffer size: {buffer_limit}, Warmup: {buffer_warmup}")
     
     if do_render:
@@ -857,9 +1098,13 @@ def train_ur5e_sac(
     torch.manual_seed(seed)
     random.seed(seed)
     
-    for epi_idx in tqdm(range(n_episode + 1)):
-        zero_to_one = epi_idx / n_episode
-        one_to_zero = 1 - zero_to_one
+    # Adjust episode range if resuming from checkpoint
+    
+    for epi_idx in tqdm(range(start_episode, end_episode + 1)):
+        # Calculate progression from 0 to 1 based on current training progress
+        progress = (epi_idx - start_episode) / n_episode
+        zero_to_one = progress
+        one_to_zero = 1 - progress
         
         s = gym.reset()
         
@@ -943,7 +1188,18 @@ def train_ur5e_sac(
         
         
         if do_log:
-            wandb.log({'episode_reward': reward_total})
+            # Calculate mean success rates
+            mean_success_episode_start = gym.total_start_reached / max(gym.total_episodes, 1)
+            mean_success_episode_end = gym.total_end_reached / max(gym.total_episodes, 1)
+            
+            wandb.log({
+                'episode_reward': reward_total,
+                'mean_success_episode_start': mean_success_episode_start,
+                'mean_success_episode_end': mean_success_episode_end,
+                'total_episodes': gym.total_episodes,
+                'total_start_reached': gym.total_start_reached,
+                'total_end_reached': gym.total_end_reached
+            })
 
         if (epi_idx % print_every) == 0:
             start_distance = info['distance_start']
@@ -957,8 +1213,35 @@ def train_ur5e_sac(
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
             
+            # Save simple checkpoint (backward compatibility)
             torch.save(actor.state_dict(), pth_path)
-            print(f"  [Save] [{pth_path}] saved.")
+            
+            # Save complete checkpoint for resuming training
+            checkpoint_path = f'./result/weights/{now_date}_sac_{gym.name.lower()}/checkpoint_episode_{epi_idx}.pth'
+            checkpoint = {
+                'episode': epi_idx,
+                'actor_state_dict': actor.state_dict(),
+                'critic_one_state_dict': critic_one.state_dict(),
+                'critic_two_state_dict': critic_two.state_dict(),
+                'critic_one_trgt_state_dict': critic_one_trgt.state_dict(),
+                'critic_two_trgt_state_dict': critic_two_trgt.state_dict(),
+                'actor_optimizer_state_dict': actor.optimizer.state_dict() if hasattr(actor, 'optimizer') else None,
+                'alpha_optimizer_state_dict': actor.alpha_optimizer.state_dict() if hasattr(actor, 'alpha_optimizer') else None,
+                'critic_one_optimizer_state_dict': critic_one.optimizer.state_dict() if hasattr(critic_one, 'optimizer') else None,
+                'critic_two_optimizer_state_dict': critic_two.optimizer.state_dict() if hasattr(critic_two, 'optimizer') else None,
+                'hyperparameters': {
+                    'lr_actor': lr_actor,
+                    'lr_alpha': lr_alpha,
+                    'lr_critic': lr_critic,
+                    'gamma': gamma,
+                    'tau': tau,
+                    'init_alpha': init_alpha,
+                    'max_torque': max_torque,
+                    'reward_mode': reward_mode,
+                }
+            }
+            torch.save(checkpoint, checkpoint_path)
+            print(f"  [Save] [{pth_path}] and [{checkpoint_path}] saved.")
     
     print("Training completed!")
     

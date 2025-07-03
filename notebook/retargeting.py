@@ -83,12 +83,25 @@ def main(
         rcontact = tick in rcontact_segs_concat
         lcontact = tick in lcontact_segs_concat
 
-        # Move target base
-        if tick == 0: # move base once
-            T_base_src  = T_joi_src['hip']
-            T_base_trgt = T_yuzf2zuxf(T_base_src)
-            env.set_T_base_body(body_name='pelvis',T=T_base_trgt)
-            env.forward()
+        # Move target base with fallback option
+        # IMPORTANT: Set UPDATE_BASE_EVERY_FRAME to True for full motion retargeting
+        # Start with False to test stability, then set to True for better motion
+        UPDATE_BASE_EVERY_FRAME = False  # Set to True to enable continuous base movement
+        
+        if UPDATE_BASE_EVERY_FRAME or tick == 0:
+            try:
+                T_base_src  = T_joi_src['hip']
+                T_base_trgt = T_yuzf2zuxf(T_base_src)
+                
+                # Validate transformation matrix
+                if np.any(np.isnan(T_base_trgt)) or np.any(np.isinf(T_base_trgt)):
+                    print(f"Warning: Invalid transformation at tick {tick}, skipping base update")
+                else:
+                    env.set_T_base_body(body_name='pelvis',T=T_base_trgt)
+                    env.forward()
+            except Exception as e:
+                print(f"Error updating base at tick {tick}: {e}")
+                break
 
         # Start motion retargeting
         T_joi_trgt = get_T_joi_from_g1(env)
@@ -130,21 +143,50 @@ def main(
         uv_lp2lk      = uv_T_joi(T_joi_src,'lp','lk')
         uv_lk2la      = uv_T_joi(T_joi_src,'lk','la')
         
-        # Set positional targets
-        p_hip_trgt   = t2p(T_joi_src['hip'])
-        p_neck_trgt  = p_hip_trgt + len_hip2neck*uv_hip2neck
-        p_rs_trgt    = p_neck_trgt + len_neck2rs*uv_neck2rs
-        p_re_trgt    = p_rs_trgt + len_rs2re*uv_rs2re
-        p_rw_trgt    = p_re_trgt + len_re2rw*uv_re2rw
-        p_ls_trgt    = p_neck_trgt + len_neck2ls*uv_neck2ls
-        p_le_trgt    = p_ls_trgt + len_ls2le*uv_ls2le
-        p_lw_trgt    = p_le_trgt + len_le2lw*uv_le2lw
-        p_rp_trgt    = p_hip_trgt + len_hip2rp*uv_hip2rp
-        p_rk_trgt    = p_rp_trgt + len_rp2rk*uv_rp2rk
-        p_ra_trgt    = p_rk_trgt + len_rk2ra*uv_rk2ra
-        p_lp_trgt    = p_hip_trgt + len_hip2lp*uv_hip2lp
-        p_lk_trgt    = p_lp_trgt + len_lp2lk*uv_lp2lk
-        p_la_trgt    = p_lk_trgt + len_lk2la*uv_lk2la
+        # Set positional targets with robust calculation
+        try:
+            if UPDATE_BASE_EVERY_FRAME:
+                # Use current robot base position (for continuous base movement)
+                T_joi_trgt_current = get_T_joi_from_g1(env)
+                p_hip_current = t2p(T_joi_trgt_current['hip'])
+                p_hip_trgt = p_hip_current
+            else:
+                # Use source hip position (for static base)
+                p_hip_trgt = t2p(T_joi_src['hip'])
+            
+            # Calculate target positions
+            p_neck_trgt  = p_hip_trgt + len_hip2neck*uv_hip2neck
+            p_rs_trgt    = p_neck_trgt + len_neck2rs*uv_neck2rs
+            p_re_trgt    = p_rs_trgt + len_rs2re*uv_rs2re
+            p_rw_trgt    = p_re_trgt + len_re2rw*uv_re2rw
+            p_ls_trgt    = p_neck_trgt + len_neck2ls*uv_neck2ls
+            p_le_trgt    = p_ls_trgt + len_ls2le*uv_ls2le
+            p_lw_trgt    = p_le_trgt + len_le2lw*uv_le2lw
+            p_rp_trgt    = p_hip_trgt + len_hip2rp*uv_hip2rp
+            p_rk_trgt    = p_rp_trgt + len_rp2rk*uv_rp2rk
+            p_ra_trgt    = p_rk_trgt + len_rk2ra*uv_rk2ra
+            p_lp_trgt    = p_hip_trgt + len_hip2lp*uv_hip2lp
+            p_lk_trgt    = p_lp_trgt + len_lp2lk*uv_lp2lk
+            p_la_trgt    = p_lk_trgt + len_lk2la*uv_lk2la
+            
+            # Validate target positions
+            target_positions = [p_neck_trgt, p_rs_trgt, p_re_trgt, p_rw_trgt, 
+                              p_ls_trgt, p_le_trgt, p_lw_trgt, p_rp_trgt, 
+                              p_rk_trgt, p_ra_trgt, p_lp_trgt, p_lk_trgt, p_la_trgt]
+            
+            invalid_positions = False
+            for i, pos in enumerate(target_positions):
+                if np.any(np.isnan(pos)) or np.any(np.isinf(pos)):
+                    print(f"Warning: Invalid target position {i} at tick {tick}, skipping frame")
+                    invalid_positions = True
+                    break
+            
+            if invalid_positions:
+                continue  # Skip to next tick
+                    
+        except Exception as e:
+            print(f"Error calculating target positions at tick {tick}: {e}")
+            continue
 
         # Set IK targets
         joi_body_name = get_joi_body_name_of_g1()
@@ -162,21 +204,59 @@ def main(
         add_ik_info(ik_info_full_body,body_name=joi_body_name['lk'],p_trgt=p_lk_trgt)
         add_ik_info(ik_info_full_body,body_name=joi_body_name['la'],p_trgt=p_la_trgt)
 
-        # Solve IK
-        max_ik_tick = 100
-        for ik_tick in range(max_ik_tick): # ik loop
-            dq,ik_err_stack = get_dq_from_ik_info(
-                env            = env,
-                ik_info        = ik_info_full_body,
-                stepsize       = 1,
-                eps            = 1e-2,
-                th             = np.radians(10.0),
-                joint_idxs_jac = joint_idxs_jac_full_body_with_base,
-            ) # dq:[43]
-            qpos = env.get_qpos() # get current joint position  [44]
-            mujoco.mj_integratePos(env.model,qpos,dq,1)
-            env.forward(q=qpos)
-            if np.linalg.norm(ik_err_stack) < 0.05: break
+        # Solve IK with safety checks and fallback parameters
+        max_ik_tick = 50
+        ik_converged = False
+        
+        try:
+            for ik_tick in range(max_ik_tick): # ik loop
+                dq,ik_err_stack = get_dq_from_ik_info(
+                    env            = env,
+                    ik_info        = ik_info_full_body,
+                    stepsize       = 0.8,  # More conservative step size
+                    eps            = 1e-2,  # Relaxed epsilon to avoid convergence issues
+                    th             = np.radians(10.0),  # Relaxed angle threshold
+                    joint_idxs_jac = joint_idxs_jac_full_body_with_base,
+                )
+                
+                # Check for invalid values in dq
+                if np.any(np.isnan(dq)) or np.any(np.isinf(dq)):
+                    print(f"Warning: Invalid dq at tick {tick}, ik_tick {ik_tick}")
+                    break
+                
+                qpos = env.get_qpos()
+                qpos_backup = qpos.copy()  # Backup current position
+                
+                # Safely integrate position
+                try:
+                    mujoco.mj_integratePos(env.model, qpos, dq, 1)
+                    
+                    # Check if resulting qpos is valid
+                    if np.any(np.isnan(qpos)) or np.any(np.isinf(qpos)):
+                        print(f"Warning: Invalid qpos after integration at tick {tick}")
+                        qpos = qpos_backup  # Restore backup
+                        break
+                    
+                    env.forward(q=qpos)
+                    
+                except Exception as e:
+                    print(f"Error in mj_integratePos at tick {tick}: {e}")
+                    qpos = qpos_backup  # Restore backup
+                    break
+                
+                # Check convergence
+                if np.linalg.norm(ik_err_stack) < 0.05:
+                    ik_converged = True
+                    break
+                    
+        except Exception as e:
+            print(f"Critical error in IK solver at tick {tick}: {e}")
+            break
+        
+        # Print IK status for debugging
+        if tick % 50 == 0:
+            status = "converged" if ik_converged else "failed"
+            print(f"Tick {tick}: IK {status} after {ik_tick+1}/{max_ik_tick} iterations, Error: {np.linalg.norm(ik_err_stack):.4f}")
                 
         # Render
         T_joi_trgt = get_T_joi_from_g1(env)
@@ -215,4 +295,5 @@ def main(
 
 
 if __name__ == "__main__":
-    main()
+    import fire
+    fire.Fire(main)
