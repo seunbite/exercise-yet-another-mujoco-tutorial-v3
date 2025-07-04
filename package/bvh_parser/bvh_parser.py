@@ -44,7 +44,7 @@ class Node(object):
 class BvhReader(object):
     """BioVision Hierarchical (.bvh) file reader."""
 
-    def __init__(self, filename):
+    def __init__(self, filename, strict_parsing=False):
 
         self.filename = filename
         # A list of unprocessed tokens (strings)
@@ -58,6 +58,9 @@ class BvhReader(object):
 
         # Total number of channels
         self.num_channels = 0
+        
+        # Parsing mode: strict will raise errors on channel mismatches
+        self.strict_parsing = strict_parsing
 
     def on_hierarchy(self, root):
         pass
@@ -115,11 +118,26 @@ class BvhReader(object):
         for i in range(frames):
             s = self.read_line()
             a = s.split()
+            
+            # More robust handling of channel count mismatches
             if len(a) != self.num_channels:
-                raise SyntaxError("Syntax error in line %d: %d float values "
-                                  "expected, got %d instead"
-                                  % (self._line_num, self.num_channels,
-                                     len(a)))
+                if self.strict_parsing:
+                    # Strict mode: raise error as before
+                    raise SyntaxError("Syntax error in line %d: %d float values "
+                                      "expected, got %d instead"
+                                      % (self._line_num, self.num_channels,
+                                         len(a)))
+                else:
+                    # Lenient mode: handle mismatches gracefully
+                    if len(a) > self.num_channels:
+                        # Too many values - truncate to expected count
+                        print(f"Warning: Line {self._line_num}: {len(a)} values found, expected {self.num_channels}. Truncating extra values.")
+                        a = a[:self.num_channels]
+                    else:
+                        # Too few values - pad with zeros
+                        print(f"Warning: Line {self._line_num}: {len(a)} values found, expected {self.num_channels}. Padding with zeros.")
+                        a.extend(['0.0'] * (self.num_channels - len(a)))
+            
             values = list(map(lambda x: float(x), a))  # In Python 3 map returns map-object, not a list. Can't slice.
             self.on_frame(values)
 
@@ -303,6 +321,9 @@ class Joint:
 
 
 class ReadBVH(BvhReader):
+
+    def __init__(self, filename, strict_parsing=False):
+        super().__init__(filename, strict_parsing)
 
     def on_hierarchy(self, root):
         #    print("readbvh: onHierarchy invoked"
@@ -694,10 +715,10 @@ def process_bvhkeyframe(keyframe, joint, t, DEBUG=0):
     return newkeyframe
 
 
-def process_bvhfile(filename, DEBUG=0):
+def process_bvhfile(filename, DEBUG=0, strict_parsing=False):
     if DEBUG:
         print("Reading BVH file...",)
-    my_bvh = ReadBVH(filename)  # Doesn't actually read the file, just creates
+    my_bvh = ReadBVH(filename, strict_parsing=strict_parsing)  # Use lenient parsing by default
     # a readbvh object and sets up the file for
     # reading in the next line.
     my_bvh.read()  # Reads and parses the file.
@@ -715,12 +736,12 @@ def process_bvhfile(filename, DEBUG=0):
         print("skeleton is: ", myskeleton)
     return myskeleton
 
-def get_skeleton_from_bvh(bvh_path):
+def get_skeleton_from_bvh(bvh_path, strict_parsing=False):
     """ 
         Get skeleton from bvh file
     """
     # Load
-    skeleton = process_bvhfile(bvh_path)
+    skeleton = process_bvhfile(bvh_path, strict_parsing=strict_parsing)
     # FK
     for tick in range(skeleton.frames):
         new_frame = process_bvhkeyframe(
@@ -899,12 +920,13 @@ def get_chains_from_bvh_cmu_mocap(
         plot_chain_graph = True,
         plot_init_chain  = False,
         verbose          = True,
+        strict_parsing   = False,
     ):
     """ 
         Get chains from bvh file of CMU motion capture data
     """
     # Get skeleton
-    skeleton = get_skeleton_from_bvh(bvh_path)
+    skeleton = get_skeleton_from_bvh(bvh_path, strict_parsing=strict_parsing)
 
     # Get chains
     secs,chains = get_chains_from_skeleton(

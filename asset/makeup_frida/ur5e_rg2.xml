@@ -342,9 +342,9 @@
                                                     euler="1.57 0 0" material="applicator_mat" class="visual_collision" />
                                                         <body name="applicator_tip" pos="0 0.11 0.05">
                                                         <geom type="sphere" size="0.005" material="applicator_mat" class="visual_collision" />
-                                                        <inertial pos="0 0 0" mass="0.001" diaginertia="1e-6 1e-6 1e-6" />
+                                                        <inertial pos="0 0 0" mass="0.1" diaginertia="1e-6 1e-6 1e-6" />
                                                     </body>
-                                                <inertial pos="0 0 0" mass="0.001" diaginertia="0.000001 0.000001 0.000001" />
+                                                <inertial pos="0 0 0" mass="0.1" diaginertia="0.000001 0.000001 0.000001" />
                                             </body>
 
                                         </body>
