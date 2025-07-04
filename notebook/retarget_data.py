@@ -9,6 +9,7 @@ from PIL import Image
 from utils import download_video, extract_frames
 import mediapipe as mp
 import shutil
+import pickle
 
 
 def extract_frames_to_memory(video_path: str, fps: int = 20):
@@ -720,6 +721,38 @@ def create_default_t_pose():
     return t_pose
 
 
+def save_3d_keypoints_raw(poses3d, output_path):
+    """
+    Save raw 3D keypoints to a pickle file for direct loading in simulator.
+    poses3d: List of 3D pose data from MediaPipe
+    output_path: Path to save the pickle file
+    """
+    print(f"[save_3d_keypoints_raw] Saving {len(poses3d)} frames of raw 3D keypoints")
+    
+    # Filter and prepare valid poses
+    valid_poses = []
+    for i, pose in enumerate(poses3d):
+        if pose is not None and isinstance(pose, np.ndarray) and pose.shape[0] >= 33:
+            valid_poses.append(pose)
+        else:
+            print(f"[save_3d_keypoints_raw] Warning: Frame {i+1} has invalid pose data")
+            # Use previous valid pose or create default
+            if len(valid_poses) > 0:
+                valid_poses.append(valid_poses[-1].copy())
+            else:
+                # Create default T-pose
+                t_pose = create_default_t_pose()
+                valid_poses.append(t_pose)
+    
+    # Save raw keypoints
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'wb') as f:
+        pickle.dump(valid_poses, f)
+    
+    print(f"[save_3d_keypoints_raw] Saved {len(valid_poses)} valid poses to {output_path}")
+    return output_path
+
+
 def create_simple_bvh_content(frames_data, fps=20):
     """Create a simple BVH file content with proper hierarchy"""
     frame_time = 1.0 / fps
@@ -908,6 +941,12 @@ def run(
     poses3d = lift_to_3d(poses_data)
     
     retarget_and_save_bvh(poses3d, template_bvh, bvh_path, fps=fps)
+    
+    # Save raw keypoints for comparison/debugging
+    keypoints_path = os.path.join(output_dir, "keypoints_raw.pkl")
+    save_3d_keypoints_raw(poses3d, keypoints_path)
+    print(f"✅ Raw 3D keypoints saved to: {keypoints_path}")
+    print(f"   Use just_bvh() in visual_retargeting.py to visualize these keypoints!")
     
     # Create visualization GIF
     if create_visualization:

@@ -41,6 +41,7 @@ class UR5eHeadTouchEnv:
             normalize_reward=False, 
             reward_mode='1',
             start_reached=False,
+            dynamic_target=10.0,
             ):
         self.env = env
         self.HZ = HZ
@@ -62,6 +63,7 @@ class UR5eHeadTouchEnv:
         self.normalize_obs = normalize_obs
         self.normalize_reward = normalize_reward
         self.reward_mode = reward_mode
+        self.dynamic_target_threshold = dynamic_target  # Success rate threshold for dynamic targets
         self.reward_mean = 0.0
         self.reward_std = 1.0
         self.reward_count = 0
@@ -588,9 +590,9 @@ class UR5eHeadTouchEnv:
         r_TIME = -0.0001
         c_START_TOUCH = 0.0
         w_START_TOUCH = -2
+        w_DISTANCE_PROGRESS = 1.0  # Weight for distance progress reward
         w_BINARY_LINE_DEVIATION = 1.0  # Weight for binary line deviation reward
         line_success_threshold = 0.02  # Threshold for being "on the line" (2cm)
-        distance_reward_max = 2.0  # Maximum distance reward when at start point
 
         reward = 0.0
         r_start_distance = 0.0
@@ -609,38 +611,31 @@ class UR5eHeadTouchEnv:
                 stop_rewarding = True
             
         if self.start_reached and not self.end_reached and not stop_rewarding:
-            # Calculate position along the line using projection
             start_point = self.target_line[0]
             end_point = self.target_line[1]
             line_vector = end_point - start_point
             line_length = np.linalg.norm(line_vector)
             
             if line_length > 1e-6:
-                # Project tip position onto the line to determine zone
                 tip_vector = applicator_tip_pos - start_point
                 projection_scalar = np.dot(tip_vector, line_vector) / (line_length ** 2)
                 
-                # Zone-based distance reward using perpendicular lines
-                if projection_scalar < 0:
-                    # Zone 1: Over start point (before start perpendicular line)
-                    r_distance_progress = -0.5
-                elif projection_scalar > 1:
-                    # Zone 3: Over end point (after end perpendicular line)
-                    r_distance_progress = 0.0
+                if projection_scalar < 0 or projection_scalar > 1:
+                    r_distance_progress = -0.05
+                    r_binary_line_deviation = 0.0
                 else:
-                    # Zone 2: Between start and end perpendicular lines
-                    # Linear reward based on proximity to end point
-                    # proximity_to_end = projection_scalar (0 at start, 1 at end)
-                    r_distance_progress = projection_scalar * distance_reward_max
+                    distance_to_end = np.linalg.norm(applicator_tip_pos - end_point)
+                    normalized_distance = distance_to_end / line_length
+                    r_distance_progress = w_DISTANCE_PROGRESS * np.maximum((1 - normalized_distance), 0.0)
+                    
+                    line_deviation = self._get_distance_from_line()
+                    if line_deviation <= line_success_threshold:
+                        r_binary_line_deviation = w_BINARY_LINE_DEVIATION
+                    else:
+                        r_binary_line_deviation = 0.0
             else:
                 r_distance_progress = 0.0
-            
-            # Binary line deviation reward (1 if on line, 0 if not)
-            line_deviation = self._get_distance_from_line()
-            if line_deviation <= line_success_threshold:
-                r_binary_line_deviation = w_BINARY_LINE_DEVIATION  # Reward for being on the line
-            else:
-                r_binary_line_deviation = 0.0  # No reward for being off the line
+                r_binary_line_deviation = 0.0
             
             if current_distance_end < self.touch_threshold:
                 self.end_reached = True
@@ -777,12 +772,31 @@ class UR5eHeadTouchEnv:
                 self.env.step(ctrl=np.zeros(len(self.joint_names)), nstep=1)
         
         self.start_reached = self.initialte_start_reached
-        self.target_pos_start = self._dynamic_target(self.head_position, x=[0.03, 0.03], y=[-0.001, 0.3], z=[0.15, 0.25])
-        self.target_line_length = random.uniform(0.1, 0.3)
-        z_offset = np.random.uniform(0.05, 0.15) * np.random.choice([-1, 1])
         
-        line_direction = np.array([np.random.choice([-1, 1]), np.random.uniform(-0.5, 0.5), z_offset / self.target_line_length])
-        line_direction = line_direction / np.linalg.norm(line_direction)
+        # Set target position based on success rate threshold
+        # Calculate current end success rate percentage
+        current_end_success_rate = (self.total_end_reached / max(self.total_episodes, 1)) * 100
+        use_dynamic_target = current_end_success_rate >= self.dynamic_target_threshold
+        
+        # Debug output for target type switching
+        if self.total_episodes > 0 and self.total_episodes % 50 == 0:  # Print every 50 episodes
+            print(f"Episode {self.total_episodes}: End success rate: {current_end_success_rate:.1f}%, "
+                  f"Target type: {'Dynamic' if use_dynamic_target else 'Static'} "
+                  f"(threshold: {self.dynamic_target_threshold}%)")
+        
+        if use_dynamic_target:
+            # Dynamic target positioning - harder, more varied
+            self.target_pos_start = self._dynamic_target(self.head_position, x=[0.03, 0.03], y=[0.0, 0.03], z=[0.15, 0.18])
+            self.target_line_length = random.uniform(0.1, 0.15)
+            z_offset = np.random.uniform(0.05, 0.15) * np.random.choice([-1, 1])
+            line_direction = np.array([np.random.choice([-1, 1]), np.random.uniform(-0.5, 0.5), z_offset / self.target_line_length])
+            line_direction = line_direction / np.linalg.norm(line_direction)
+        else:
+            # Static target positioning - easier, consistent
+            self.target_pos_start = self.head_position + np.array([0.03, 0.015, 0.165])  # Fixed offset
+            self.target_line_length = 0.125  # Fixed length
+            line_direction = np.array([1, 0, 0])  # Fixed direction (along x-axis)
+        
         self.target_line = self._make_line(self.target_pos_start, direction=line_direction, length=self.target_line_length)
         self.prev_tip_pos = self.target_pos_start.copy()
         self.prev_distance_to_end = self.get_distance(self.target_pos_start, self.target_line[1])
@@ -907,6 +921,7 @@ def train_ur5e_sac(
     test_only=False,
     start_reached=False,
     n_test_episodes=3,
+    dynamic_target=10.0,
     result_path=None,
     do_render=True,
     do_log=True,
@@ -915,7 +930,7 @@ def train_ur5e_sac(
     max_epi_sec=5.0,
     n_warmup_epi=10,
     buffer_limit=50000,
-    init_alpha=0.1,
+    init_alpha=0.1,  # <-- Increase init_alpha to encourage more exploration (default was 0.1)
     max_torque=1.0,
     lr_actor=0.0005,
     lr_alpha=0.0001,
@@ -929,6 +944,15 @@ def train_ur5e_sac(
     seed=0,
     train_from_checkpoint=None,
     ):
+    """
+    Train UR5e with SAC algorithm for head touch task.
+    
+    Args:
+        dynamic_target (float): Success rate threshold (%) for switching to dynamic targets.
+                               When mean end success rate >= this value, targets become dynamic.
+                               Example: 10.0 means switch when success rate reaches 10%.
+                               This enables curriculum learning: static targets (easier) → dynamic targets (harder).
+    """
     now_date = strftime("%Y-%m-%d")
     now_time = strftime("%H-%M-%S")
     if result_path is None:
@@ -950,7 +974,7 @@ def train_ur5e_sac(
         
         print(f"Initializing environment for testing...")
         env = MuJoCoParserClass(name=f'UR5e_Test', rel_xml_path=xml_path, verbose=False)
-        gym = UR5eHeadTouchEnv(env=env, HZ=50, reward_mode=reward_mode, start_reached=start_reached)
+        gym = UR5eHeadTouchEnv(env=env, HZ=50, reward_mode=reward_mode, start_reached=start_reached, dynamic_target=dynamic_target)
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"Using device: {device}")
         
@@ -1019,7 +1043,7 @@ def train_ur5e_sac(
     buffer_warmup=buffer_limit // 5
 
     env = MuJoCoParserClass(name=f'UR5e_{what_changed}_{now_time}', rel_xml_path=xml_path, verbose=True)
-    gym = UR5eHeadTouchEnv(env=env, HZ=50, reward_mode=reward_mode, start_reached=start_reached)
+    gym = UR5eHeadTouchEnv(env=env, HZ=50, reward_mode=reward_mode, start_reached=start_reached, dynamic_target=dynamic_target)
     max_epi_tick=int(max_epi_sec * gym.HZ)
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
