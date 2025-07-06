@@ -930,7 +930,7 @@ def train_ur5e_sac(
     max_epi_sec=5.0,
     n_warmup_epi=10,
     buffer_limit=50000,
-    init_alpha=0.1,  # <-- Increase init_alpha to encourage more exploration (default was 0.1)
+    init_alpha=0.2,  # <-- Increase init_alpha to encourage more exploration (default was 0.1)
     max_torque=1.0,
     lr_actor=0.0005,
     lr_alpha=0.0001,

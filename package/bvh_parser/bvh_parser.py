@@ -759,6 +759,9 @@ def get_chains_from_skeleton(
         plot_chain_graph = True,
         plot_init_chain  = True,
         verbose          = True,
+        zup              = True,
+        rotate_axis      = None,
+        rotate_deg       = 0.0,
     ):
     """ 
         Get chains from skeleton
@@ -887,6 +890,45 @@ def get_chains_from_skeleton(
         # Append
         chains.append(deepcopy(chain)) # we have to 'deepcopy'
     
+    # Z-up
+    if zup:
+        chains_zup = []
+        for tick,chain in enumerate(chains):
+            p_root,R_root = chain.get_root_joint_pR()
+            T_root = pr2t(p_root,R_root)
+            T_root_zup = pr2t(np.array([0,0,0]),rpy2r(np.radians([90,0,0])) @ R_root)
+            p_root_zup,R_root_zup = t2pr(T_root_zup)
+            # FK chain
+            chain_zup = deepcopy(chain)
+            chain_zup.set_root_joint_pR(p=p_root_zup,R=R_root_zup)
+            chain_zup.forward_kinematics()
+            chains_zup.append(chain_zup) # we have to 'deepcopy'
+        chains = chains_zup
+
+    # Optional rotation
+    if rotate_axis is not None and abs(rotate_deg) > 1e-6:
+        if rotate_axis.lower() == 'x':
+            R_add = rpy2r(np.radians([rotate_deg, 0, 0]))
+        elif rotate_axis.lower() == 'y':
+            R_add = rpy2r(np.radians([0, rotate_deg, 0]))
+        elif rotate_axis.lower() == 'z':
+            R_add = rpy2r(np.radians([0, 0, rotate_deg]))
+        else:
+            raise ValueError("rotate_axis must be 'x', 'y', or 'z'")
+
+        T_rot = pr2t(np.zeros(3), R_add)
+        chains_rot = []
+        for chain in chains:
+            p_root, R_root = chain.get_root_joint_pR()
+            T_root = pr2t(p_root, R_root)
+            T_root_rot = T_rot @ T_root
+            p_new, R_new = t2pr(T_root_rot)
+            chain_rot = deepcopy(chain)
+            chain_rot.set_root_joint_pR(p=p_new, R=R_new)
+            chain_rot.forward_kinematics()
+            chains_rot.append(chain_rot)
+        chains = chains_rot
+
     # Return
     return secs,chains
 
@@ -937,6 +979,7 @@ def get_chains_from_bvh_cmu_mocap(
         plot_chain_graph = plot_chain_graph,
         plot_init_chain  = plot_init_chain,
         verbose          = verbose,
+        zup              = zup,
     )
 
     # Z-up

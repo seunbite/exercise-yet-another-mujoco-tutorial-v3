@@ -4,3 +4,12 @@ WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-an
 Thu Jul  3 18:01:25 2025
 WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/notebook/just_bvh'
 
+Fri Jul  4 17:12:24 2025
+WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/notebook/python'
+
+Fri Jul  4 20:42:22 2025
+WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/notebook/main'
+
+Sun Jul  6 17:04:03 2025
+WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/notebook/main'
+

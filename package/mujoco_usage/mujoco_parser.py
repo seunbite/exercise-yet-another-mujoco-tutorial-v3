@@ -1,6 +1,7 @@
 import os,mujoco,time,cv2,copy,glfw
 import numpy as np
 from mujoco_custom_viewer import MujocoMinimalViewer
+from mujoco_python_viewer import MujocoPythonViewer
 """
 sys.path.append('../../package/helper/')
  => this should be called before calling 'from mujoco_parser import MuJoCoParserClass' 
@@ -279,26 +280,40 @@ class MuJoCoParserClass(object):
             geomgroup_2   = None,
             update        = False,
             maxgeom       = 10000,
+            backend       = 'native',
         ):
         """ 
             Initialize viewer
         """
+        # Validate backend
+        backend = backend.lower()
+        if backend not in ['minimal', 'native']:
+            raise ValueError(f"Unknown viewer backend: {backend}. Choose 'minimal' or 'native'.")
+
         self.use_mujoco_viewer = True
         if title is None: title = self.name
 
-        self.viewer = MujocoMinimalViewer(
-            self.model,
-            self.data,
-            mode       = 'window',
-            title      = title,
-            width      = width,
-            height     = height,
-            hide_menus = hide_menu,
-            maxgeom    = maxgeom,
-        )
-        self.viewer.ctx = mujoco.MjrContext(self.model,fontscale)
-        
-        # Set viewer
+        # Select backend
+        if backend == 'minimal':
+            self.viewer = MujocoMinimalViewer(
+                self.model,
+                self.data,
+                mode       = 'window',
+                title      = title,
+                width      = width,
+                height     = height,
+                hide_menus = hide_menu,
+                maxgeom    = maxgeom,
+            )
+            self.viewer.ctx = mujoco.MjrContext(self.model,fontscale)
+        else:
+            self.viewer = MujocoPythonViewer(
+                self.model,
+                self.data,
+                title=title,
+            )
+
+        # Apply viewer settings
         self.set_viewer(
             azimuth       = azimuth,
             distance      = distance,
@@ -1096,6 +1111,903 @@ class MuJoCoParserClass(object):
             label = ''
         )
         
+    def plot_traj(
+            self,
+            traj,
+            rgba          = [1,0,0,1],
+            plot_line     = True,
+            plot_cylinder = False,
+            plot_sphere   = False,
+            cylinder_r    = 0.01,
+            sphere_r      = 0.01,
+        ):
+        """ 
+            Plot trajectory
+        """
+        L = traj.shape[0]
+        for idx in range(L-1):
+            p_fr = traj[idx,:]
+            p_to = traj[idx+1,:]
+            if plot_line:
+                self.plot_line_fr2to(p_fr=p_fr,p_to=p_to,rgba=rgba)
+            if plot_cylinder:
+                self.plot_cylinder_fr2to(p_fr=p_fr,p_to=p_to,r=cylinder_r,rgba=rgba)
+        if plot_sphere:
+            for idx in range(L):
+                p = traj[idx,:]
+                self.plot_sphere(p=p,r=sphere_r,rgba=rgba)
+        
+    def plot_text(self,p,label=''):
+        """ 
+            Plot text
+        """
+        self.viewer.add_marker(
+            pos   = p,
+            size  = [0.0001,0.0001,0.0001],
+            rgba  = [1,1,1,0.01],
+            type  = mujoco.mjtGeom.mjGEOM_SPHERE,
+            label = label,
+        )
+
+    def plot_time(self,p=np.array([0,0,1]),post_str=''):
+        """ 
+            Plot text
+        """
+        self.plot_text(
+            p     = p,
+            label = "[%d] sim_time:[%.2f]sec wall_time:[%.2f]sec %s"%
+                    (self.tick,self.get_sim_time(),self.get_wall_time(),post_str),
+        )
+
+    def plot_body_T(
+            self,
+            body_name,
+            plot_axis   = True,
+            axis_len    = 0.2,
+            axis_width  = 0.01,
+            axis_rgba   = None,
+            plot_sphere = False,
+            sphere_r    = 0.05,
+            sphere_rgba = [1,0,0,0.5],
+            label       = None,
+        ):
+        """
+            Plot coordinate axes on a body
+        """
+        p,R = self.get_pR_body(body_name=body_name)
+        self.plot_T(
+            p,
+            R,
+            plot_axis   = plot_axis,
+            axis_len    = axis_len,
+            axis_width  = axis_width,
+            axis_rgba   = axis_rgba,
+            plot_sphere = plot_sphere,
+            sphere_r    = sphere_r,
+            sphere_rgba = sphere_rgba,
+            label       = label,
+        )
+        
+    def plot_joint_T(
+            self,
+            joint_name,
+            plot_axis  = True,
+            axis_len   = 1.0,
+            axis_width = 0.01,
+            axis_rgba  = None,
+            label      = None,
+        ):
+        """
+            Plot coordinate axes on a joint
+        """
+        p,R = self.get_pR_joint(joint_name=joint_name)
+        self.plot_T(
+            p,
+            R,
+            plot_axis  = plot_axis,
+            axis_len   = axis_len,
+            axis_width = axis_width,
+            axis_rgba  = axis_rgba,
+            label      = label,
+        )
+        
+    def plot_bodies_T(
+            self,
+            body_names            = None,
+            body_names_to_exclude = [],
+            body_names_to_exclude_including = [],
+            print_name            = False,
+            axis_len              = 0.05,
+            axis_width            = 0.005,
+        ):
+        """ 
+            Plot bodies T
+        """
+        def should_exclude(x, exclude_list):
+            for exclude in exclude_list:
+                if exclude in x:
+                    return True
+            return False
+        
+        if body_names is None:
+            body_names = self.body_names
+            
+        for body_idx,body_name in enumerate(body_names):
+            if body_name in body_names_to_exclude: continue
+            
+            if should_exclude(body_name,body_names_to_exclude_including): 
+                # exclude body_name including ones in 'body_names_to_exclude_including'
+                continue
+            
+            if print_name:
+                label = '[%d] %s'%(body_idx,body_name)
+            else:
+                label = ''
+            self.plot_body_T(
+                body_name  = body_name,
+                plot_axis  = True,
+                axis_len   = axis_len,
+                axis_width = axis_width,
+                label      = label,
+            )
+            
+    def plot_links_between_bodies(
+            self,
+            parent_body_names_to_exclude = ['world'],
+            r                            = 0.005,
+            rgba                         = (0.0,0.0,0.0,0.5),
+        ):
+        """ 
+            Plot links between bodies
+        """
+        for body_idx,body_name in enumerate(self.body_names):
+            parent_body_name = self.parent_body_names[body_idx]
+            if parent_body_name in parent_body_names_to_exclude: continue
+            if body_name is None: continue
+            
+            self.plot_cylinder_fr2to(
+                p_fr = self.get_p_body(body_name=parent_body_name),
+                p_to = self.get_p_body(body_name=body_name),
+                r    = r,
+                rgba = rgba,
+            )
+
+    def plot_joint_axis(
+            self,
+            axis_len    = 0.1,
+            axis_r      = 0.01,
+            joint_names = None,
+            alpha       = 0.2,
+        ):
+        """ 
+            Plot revolute joint axis 
+        """
+        rev_joint_idxs  = self.rev_joint_idxs
+        rev_joint_names = self.rev_joint_names
+
+        if joint_names is not None:
+            idxs = get_idxs(self.rev_joint_names,joint_names)
+            rev_joint_idxs_to_use  = rev_joint_idxs[idxs]
+            rev_joint_names_to_use = [rev_joint_names[i] for i in idxs]
+        else:
+            rev_joint_idxs_to_use  = rev_joint_idxs
+            rev_joint_names_to_use = rev_joint_names
+
+        for rev_joint_idx,rev_joint_name in zip(rev_joint_idxs_to_use,rev_joint_names_to_use):
+            axis_joint      = self.model.jnt_axis[rev_joint_idx]
+            p_joint,R_joint = self.get_pR_joint(joint_name=rev_joint_name)
+            axis_world      = R_joint@axis_joint
+            axis_rgba       = np.append(np.eye(3)[:,np.argmax(axis_joint)],alpha)
+            self.plot_arrow_fr2to(
+                p_fr = p_joint,
+                p_to = p_joint+axis_len*axis_world,
+                r    = axis_r,
+                rgba = axis_rgba
+            )
+
+    def get_contact_body_names(self):
+        """ 
+            Get contacting body names
+        """
+        contact_body_names = []
+        for c_idx in range(self.data.ncon):
+            contact = self.data.contact[c_idx]
+            contact_body1 = self.body_names[self.model.geom_bodyid[contact.geom1]]
+            contact_body2 = self.body_names[self.model.geom_bodyid[contact.geom2]]
+        return contact_body_names
+
+    def get_contact_info(self,must_include_prefix=None,must_exclude_prefix=None):
+        """
+            Get contact information
+        """
+        p_contacts = []
+        f_contacts = []
+        geom1s = []
+        geom2s = []
+        body1s = []
+        body2s = []
+        for c_idx in range(self.data.ncon):
+            contact   = self.data.contact[c_idx]
+            # Contact position and frame orientation
+            p_contact = contact.pos # contact position
+            R_frame   = contact.frame.reshape(( 3,3))
+            # Contact force
+            f_contact_local = np.zeros(6,dtype=np.float64)
+            mujoco.mj_contactForce(self.model,self.data,0,f_contact_local)
+            f_contact = R_frame @ f_contact_local[:3] # in the global coordinate
+            # Contacting geoms
+            contact_geom1 = self.geom_names[contact.geom1]
+            contact_geom2 = self.geom_names[contact.geom2]
+            contact_body1 = self.body_names[self.model.geom_bodyid[contact.geom1]]
+            contact_body2 = self.body_names[self.model.geom_bodyid[contact.geom2]]
+            # Append
+            if must_include_prefix is not None:
+                if (contact_geom1[:len(must_include_prefix)] == must_include_prefix) or (contact_geom2[:len(must_include_prefix)] == must_include_prefix):
+                    p_contacts.append(p_contact)
+                    f_contacts.append(f_contact)
+                    geom1s.append(contact_geom1)
+                    geom2s.append(contact_geom2)
+                    body1s.append(contact_body1)
+                    body2s.append(contact_body2)
+            elif must_exclude_prefix is not None:
+                if (contact_geom1[:len(must_exclude_prefix)] != must_exclude_prefix) and (contact_geom2[:len(must_exclude_prefix)] != must_exclude_prefix):
+                    p_contacts.append(p_contact)
+                    f_contacts.append(f_contact)
+                    geom1s.append(contact_geom1)
+                    geom2s.append(contact_geom2)
+                    body1s.append(contact_body1)
+                    body2s.append(contact_body2)
+            else:
+                p_contacts.append(p_contact)
+                f_contacts.append(f_contact)
+                geom1s.append(contact_geom1)
+                geom2s.append(contact_geom2)
+                body1s.append(contact_body1)
+                body2s.append(contact_body2)
+        return p_contacts,f_contacts,geom1s,geom2s,body1s,body2s
+
+    def print_contact_info(self,must_include_prefix=None):
+        """ 
+            Print contact information
+        """
+        # Get contact information
+        p_contacts,f_contacts,geom1s,geom2s,body1s,body2s = self.get_contact_info(
+            must_include_prefix=must_include_prefix)
+        for (p_contact,f_contact,geom1,geom2,body1,body2) in zip(p_contacts,f_contacts,geom1s,geom2s,body1s,body2s):
+            print ("Tick:[%d] Body contact:[%s]-[%s]"%(self.tick,body1,body2))
+
+    def plot_arrow_contact(self,p,uv,r_arrow=0.03,h_arrow=0.3,rgba=[1,0,0,1],label=''):
+        """
+            Plot arrow
+        """
+        p_a = np.copy(np.array([0,0,1]))
+        p_b = np.copy(uv)
+        p_a_norm = np.linalg.norm(p_a)
+        p_b_norm = np.linalg.norm(p_b)
+        if p_a_norm > 1e-9: p_a = p_a/p_a_norm
+        if p_b_norm > 1e-9: p_b = p_b/p_b_norm
+        v = np.cross(p_a,p_b)
+        S = np.array([[0,-v[2],v[1]],[v[2],0,-v[0]],[-v[1],v[0],0]])
+        if np.linalg.norm(v) == 0:
+            R = np.eye(3,3)
+        else:
+            R = np.eye(3,3) + S + S@S*(1-np.dot(p_a,p_b))/(np.linalg.norm(v)*np.linalg.norm(v))
+
+        self.viewer.add_marker(
+            pos   = p,
+            mat   = R,
+            type  = mujoco.mjtGeom.mjGEOM_ARROW,
+            size  = [r_arrow,r_arrow,h_arrow],
+            rgba  = rgba,
+            label = label
+        )
+
+    def plot_joints(
+            self,
+            joint_names      = None,
+            plot_axis        = True,
+            axis_len         = 0.1,
+            axis_width       = 0.01,
+            axis_rgba        = None,
+            plot_joint_names = False,
+        ):
+        """ 
+            Plot joint names
+        """
+        if joint_names is None:
+            joint_names = self.joint_names
+        for joint_name in joint_names:
+            if joint_name is not None:
+                if plot_joint_names:
+                    label = joint_name
+                else:
+                    label = None
+                self.plot_joint_T(
+                    joint_name,
+                    plot_axis  = plot_axis,
+                    axis_len   = axis_len,
+                    axis_width = axis_width,
+                    axis_rgba  = axis_rgba,
+                    label      = label,
+                )
+
+    def plot_contact_info(
+            self,
+            must_include_prefix = None,
+            r_arrow             = 0.005,
+            h_arrow             = 0.1,
+            rgba_contact        = [1,0,0,1],
+            r_sphere            = 0.02,
+            plot_arrow          = True,
+            plot_sphere         = False,
+            print_contact_body  = False,
+            print_contact_geom  = False,
+            verbose             = False
+        ):
+        """
+            Plot contact information
+        """
+        # Get contact information
+        p_contacts,f_contacts,geom1s,geom2s,body1s,body2s = self.get_contact_info(
+            must_include_prefix=must_include_prefix)
+        # Render contact informations
+        for (p_contact,f_contact,geom1,geom2,body1,body2) in zip(p_contacts,f_contacts,geom1s,geom2s,body1s,body2s):
+            f_norm = np.linalg.norm(f_contact)
+            f_uv   = f_contact / (f_norm+1e-8)
+            # h_arrow = 0.3 # f_norm*0.05
+            if plot_arrow:
+                self.plot_arrow_contact(
+                    p       = p_contact,
+                    uv      = f_uv,
+                    r_arrow = r_arrow,
+                    h_arrow = h_arrow,
+                    rgba    = rgba_contact,
+                    label   = '',
+                )
+                self.plot_arrow_contact(
+                    p       = p_contact,
+                    uv      = -f_uv,
+                    r_arrow = r_arrow,
+                    h_arrow = h_arrow,
+                    rgba    = rgba_contact,
+                    label   = '',
+                )
+            if plot_sphere: 
+                # contact_label = '[%s]-[%s]'%(body1,body2)
+                contact_label = ''
+                self.plot_sphere(p=p_contact,r=r_sphere,rgba=rgba_contact,label=contact_label)
+            if print_contact_body:
+                label = '[%s]-[%s]'%(body1,body2)
+            elif print_contact_geom:
+                label = '[%s]-[%s]'%(geom1,geom2)
+            else:
+                label = '' 
+        # Print
+        if verbose:
+            self.print_contact_info(must_include_prefix=must_include_prefix)
+
+    def get_idxs_fwd(self,joint_names):
+        """ 
+            Get indices for using env.forward()
+            Example)
+            env.forward(q=q,joint_idxs=idxs_fwd) # <= HERE
+        """
+        return [self.model.joint(jname).qposadr[0] for jname in joint_names]
+    
+    def get_idxs_jac(self,joint_names):
+        """ 
+            Get indices for solving inverse kinematics
+            Example)
+            J,ik_err = env.get_ik_ingredients(...)
+            dq = env.damped_ls(J,ik_err,stepsize=1,eps=1e-2,th=np.radians(1.0))
+            q = q + dq[idxs_jac] # <= HERE
+        """
+        return [self.model.joint(jname).dofadr[0] for jname in joint_names]
+    
+    def get_idxs_step(self,joint_names):
+        """ 
+            Get indices for using env.step()
+            Example)
+            env.step(ctrl=q,ctrl_idxs=idxs_step) # <= HERE
+        """
+        return [self.ctrl_qpos_names.index(jname) for jname in joint_names]
+    
+    def get_qpos(self):
+        """ 
+            Get joint positions
+        """
+        return self.data.qpos.copy() # [n_qpos]
+    
+    def get_qvel(self):
+        """ 
+            Get joint velocities
+        """
+        return self.data.qvel.copy() # [n_qvel]
+    
+    def get_qacc(self):
+        """ 
+            Get joint accelerations
+        """
+        return self.data.qacc.copy() # [n_qacc]
+
+    def get_qpos_joint(self,joint_name):
+        """
+            Get joint position
+        """
+        addr = self.model.joint(joint_name).qposadr[0]
+        L = len(self.model.joint(joint_name).qpos0)
+        qpos = self.data.qpos[addr:addr+L]
+        return qpos
+    
+    def get_qvel_joint(self,joint_name):
+        """
+            Get joint velocity
+        """
+        addr = self.model.joint(joint_name).dofadr[0]
+        L = len(self.model.joint(joint_name).qpos0)
+        if L > 1: L = 6
+        qvel = self.data.qvel[addr:addr+L]
+        return qvel
+    
+    def get_qpos_joints(self,joint_names):
+        """
+            Get multiple joint positions from 'joint_names'
+        """
+        return np.array([self.get_qpos_joint(joint_name) for joint_name in joint_names]).squeeze()
+    
+    def get_qvel_joints(self,joint_names):
+        """
+            Get multiple joint velocities from 'joint_names'
+        """
+        return np.array([self.get_qvel_joint(joint_name) for joint_name in joint_names]).squeeze()
+    
+    def get_ctrl(self,ctrl_names):
+        """ 
+            Get control values
+        """
+        idxs = get_idxs(self.ctrl_names,ctrl_names)
+        return np.array([self.data.ctrl[idx] for idx in idxs]).squeeze()
+    
+    def set_qpos_joints(self,joint_names,qpos):
+        """ 
+            Set joint positions
+        """
+        joint_idxs = self.get_idxs_fwd(joint_names)
+        self.data.qpos[joint_idxs] = qpos
+        mujoco.mj_forward(self.model,self.data)
+
+    def set_ctrl(self,ctrl_names,ctrl,nstep=1):
+        """ 
+        """
+        ctrl_idxs = get_idxs(self.ctrl_names,ctrl_names)
+        self.data.ctrl[ctrl_idxs] = ctrl
+        mujoco.mj_step(self.model,self.data,nstep=nstep)
+        
+    def viewer_pause(self):
+        """
+            Viewer pause
+        """
+        self.viewer._paused = True
+        
+    def viewer_resume(self):
+        """
+            Viewer resume
+        """
+        self.viewer._paused = False
+    
+    def get_viewer_mouse_xy(self):
+        """
+            Get viewer mouse (x,y)
+        """
+        viewer_mouse_xy = np.array([self.viewer._last_mouse_x,self.viewer._last_mouse_y])
+        return viewer_mouse_xy
+    
+    def get_xyz_left_double_click(self):
+        """ 
+            Get xyz location of double click
+        """
+        flag_click = False
+        if self.viewer._left_double_click_pressed: # left double click
+            viewer_mouse_xy = self.get_viewer_mouse_xy()
+            _,_,_,_,xyz_img_world = self.get_egocentric_rgbd_pcd()
+            self.xyz_double_click = xyz_img_world[int(viewer_mouse_xy[1]),int(viewer_mouse_xy[0])]
+            self.viewer._left_double_click_pressed = False
+            flag_click = True
+        return self.xyz_double_click,flag_click
+    
+    def is_left_double_clicked(self):
+        """ 
+            Check left double click
+        """
+        if self.viewer._left_double_click_pressed: # left double click
+            viewer_mouse_xy = self.get_viewer_mouse_xy()
+            _,_,_,_,xyz_img_world = self.get_egocentric_rgbd_pcd()
+            self.xyz_double_click = xyz_img_world[int(viewer_mouse_xy[1]),int(viewer_mouse_xy[0])]
+            self.viewer._left_double_click_pressed = False # toggle flag
+            return True 
+        else:
+            return False
+    
+    def get_body_name_closest(self,xyz,body_names=None,verbose=False):
+        """
+            Get the closest body name to xyz
+        """
+        if body_names is None:
+            body_names = self.body_names
+        dists = np.zeros(len(body_names))
+        p_body_list = []
+        for body_idx,body_name in enumerate(body_names):
+            p_body = self.get_p_body(body_name=body_name)
+            dist = np.linalg.norm(p_body-xyz)
+            dists[body_idx] = dist # append
+            p_body_list.append(p_body) # append
+        idx_min = np.argmin(dists)
+        body_name_closest = body_names[idx_min]
+        p_body_closest = p_body_list[idx_min]
+        if verbose:
+            print ("[%s] selected"%(body_name_closest))
+        return body_name_closest,p_body_closest
+    
+    # Inverse kinematics
+    def get_J_body(self,body_name):
+        """
+            Get Jocobian matrices of a body
+        """
+        J_p = np.zeros((3,self.n_dof)) # nv: nDoF
+        J_R = np.zeros((3,self.n_dof))
+        mujoco.mj_jacBody(self.model,self.data,J_p,J_R,self.data.body(body_name).id)
+        J_full = np.array(np.vstack([J_p,J_R]))
+        return J_p,J_R,J_full
+
+    def get_J_geom(self,geom_name):
+        """
+            Get Jocobian matrices of a geom
+        """
+        J_p = np.zeros((3,self.n_dof)) # nv: nDoF
+        J_R = np.zeros((3,self.n_dof))
+        mujoco.mj_jacGeom(self.model,self.data,J_p,J_R,self.data.geom(geom_name).id)
+        J_full = np.array(np.vstack([J_p,J_R]))
+        return J_p,J_R,J_full
+
+    def get_ik_ingredients(
+            self,
+            body_name = None,
+            geom_name = None,
+            p_trgt    = None,
+            R_trgt    = None,
+            IK_P      = True,
+            IK_R      = True,
+        ):
+        """
+            Get IK ingredients
+        """
+        if body_name is not None:
+            J_p,J_R,J_full = self.get_J_body(body_name=body_name)
+            p_curr,R_curr = self.get_pR_body(body_name=body_name)
+        if geom_name is not None:
+            J_p,J_R,J_full = self.get_J_geom(geom_name=geom_name)
+            p_curr,R_curr = self.get_pR_geom(geom_name=geom_name)
+        if (body_name is not None) and (geom_name is not None):
+            print ("[get_ik_ingredients] body_name:[%s] geom_name:[%s] are both not None!"%(body_name,geom_name))
+        if (IK_P and IK_R):
+            p_err = (p_trgt-p_curr)
+            R_err = np.linalg.solve(R_curr,R_trgt)
+            w_err = R_curr @ r2w(R_err)
+            J     = J_full
+            err   = np.concatenate((p_err,w_err))
+        elif (IK_P and not IK_R):
+            p_err = (p_trgt-p_curr)
+            J     = J_p
+            err   = p_err
+        elif (not IK_P and IK_R):
+            R_err = np.linalg.solve(R_curr,R_trgt)
+            w_err = R_curr @ r2w(R_err)
+            J     = J_R
+            err   = w_err
+        else:
+            J   = None
+            err = None
+        return J,err
+    
+    def damped_ls(self,J,err,eps=1e-6,stepsize=1.0,th=5*np.pi/180.0):
+        """
+            Dampled least square for IK
+        """
+        dq = stepsize*np.linalg.solve(a=(J.T@J)+eps*np.eye(J.shape[1]),b=J.T@err)
+        dq = trim_scale(x=dq,th=th)
+        return dq
+
+    def onestep_ik(
+            self,
+            body_name  = None,
+            geom_name  = None,
+            p_trgt     = None,
+            R_trgt     = None,
+            IK_P       = True,
+            IK_R       = True,
+            joint_idxs = None,
+            stepsize   = 1,
+            eps        = 1e-1,
+            th         = 5*np.pi/180.0,
+        ):
+        """
+            Solve IK for a single step
+        """
+        J,err = self.get_ik_ingredients(
+            body_name = body_name,
+            geom_name = geom_name,
+            p_trgt    = p_trgt,
+            R_trgt    = R_trgt,
+            IK_P      = IK_P,
+            IK_R      = IK_R,
+            )
+        dq = self.damped_ls(J,err,stepsize=stepsize,eps=eps,th=th)
+        if joint_idxs is None:
+            joint_idxs = self.rev_joint_idxs
+        q = self.get_q(joint_idxs=joint_idxs)
+        q = q + dq[joint_idxs]
+        # FK
+        self.forward(q=q,joint_idxs=joint_idxs)
+        return q, err
+    
+    def is_key_pressed(self,char=None,chars=None,upper=True):
+        """ 
+            Check keyboard pressed (high-level function calling 'check_key_pressed()')
+        """
+        if self.viewer._is_key_pressed:
+            self.viewer._is_key_pressed = False
+            return self.check_key_pressed(char=char,chars=chars,upper=upper)
+        else:
+            return False
+
+    def check_key_pressed(self,char=None,chars=None,upper=True):
+        """
+            Check keyboard pressed from a character (e.g., 'a','b','1', or ['a','b','c'])
+        """
+        # Check a single character
+        if char is not None:
+            if upper: char = char.upper()
+            if self.get_key_pressed() == char:
+                return True
+        
+        # Check a list of characters
+        if chars is not None:
+            for _char in chars:
+                if upper: _char = _char.upper()
+                if self.get_key_pressed() == _char:
+                    return True
+        
+        # (default) Return False
+        return False
+        
+    def get_key_pressed(self,to_int=False):
+        """ 
+            Get keyboard pressed
+        """
+        if self.viewer._key_pressed is None: return None
+        char = chr(self.viewer._key_pressed)
+        if to_int: char = int(char) # to integer
+        return char
+    
+    def animate_free_fall(
+            self,
+            plot_every  = 1,
+            transparent = True,
+            azimuth     = 170,
+            distance    = 5,
+            elevation   = -27,
+            lookat      = [0.01, 0.11, 0.8],
+        ):
+        """ 
+            Animate the simple free fall motion
+        """
+        self.reset(step=True)
+        self.init_viewer(
+            transparent = transparent,
+            azimuth     = azimuth,
+            distance    = distance,
+            elevation   = elevation,
+            lookat      = lookat,
+        )
+        while self.is_viewer_alive():    
+            # Step
+            self.step()
+            # Render
+            if self.loop_every(tick_every=plot_every):
+                self.plot_T(p=np.array([0,0,0]),R=np.eye(3,3))
+                self.plot_time()
+                self.plot_contact_info(r_arrow=0.005,h_arrow=0.1,plot_sphere=False,verbose=False)
+                self.render()
+        self.close_viewer()
+
+    def animate_kinematic_slider_control(
+            self,
+            joint_names = None,
+            plot_every  = 10,
+            transparent = True,
+            azimuth     = 170,
+            distance    = 5,
+            elevation   = -27,
+            lookat      = [0.01, 0.11, 0.8],
+            axis_len    = 0.1,
+            axis_r      = 0.01,
+            plot_org_T  = True,
+            plot_link   = True,
+        ):
+        """ 
+            Animate basic kinematic slider control
+        """
+        
+        # Reset env
+        self.reset(step=True)
+
+        # Configuration
+        if joint_names is None:
+            joint_names = self.rev_joint_names # default is to use revolute joints
+        idxs = get_idxs(self.rev_joint_names,joint_names)
+        init_qpos = self.get_qpos_joints(joint_names=joint_names)
+        resolution = np.deg2rad(0.1)
+        sliders = MultiSliderClass(
+            n_slider      = len(joint_names),
+            title         = 'Sliders for [%s] Control'%(self.name),
+            window_width  = 600,
+            window_height = 800,
+            x_offset      = 100,
+            y_offset      = 100,
+            slider_width  = 450,
+            label_texts   = [self.rev_joint_names[idx] for idx in idxs],
+            slider_mins   = [self.rev_joint_mins[idx] for idx in idxs],
+            slider_maxs   = [self.rev_joint_maxs[idx] for idx in idxs],
+            slider_vals   = init_qpos,
+            resolution    = resolution,
+            verbose       = False,
+        )
+        idxs_fwd = self.get_idxs_fwd(joint_names=joint_names)
+
+        # Initialize viewer
+        self.init_viewer(
+            transparent = transparent,
+            azimuth     = azimuth,
+            distance    = distance,
+            elevation   = elevation,
+            lookat      = lookat,
+        )
+        
+        # Loop
+        while self.is_viewer_alive():
+            # Update
+            sliders.update() # update slider
+            self.forward(q=sliders.get_slider_values(),joint_idxs=idxs_fwd)
+            # Render
+            if self.loop_every(tick_every=plot_every):
+                if plot_org_T:
+                    self.plot_T(p=np.array([0,0,0]),R=np.eye(3,3))
+                self.plot_time()
+                self.plot_contact_info(r_arrow=0.005,h_arrow=0.1,plot_sphere=False,verbose=False)
+                self.plot_joint_axis(
+                    axis_len    = axis_len,
+                    axis_r      = axis_r,
+                    joint_names = joint_names,
+                )
+                # Plot links
+                if plot_link:
+                    self.plot_links_between_bodies(
+                        parent_body_names_to_exclude=['world'],
+                        r    = 0.0025,
+                        rgba = (0,0,0,1)
+                    )
+                self.render()
+
+        # Close
+        self.close_viewer()
+        sliders.close()
+
+    def animate_dynamic_slider_control(
+            self,
+            ctrl_names  = None,
+            init_ctrl   = None,
+            plot_every  = 10,
+            transparent = True,
+            azimuth     = 170,
+            distance    = 5,
+            elevation   = -27,
+            lookat      = [0.01, 0.11, 0.8],
+            axis_len    = 0.1,
+            axis_r      = 0.01,
+        ):
+        """ 
+            Animate basic dynamic slider control
+        """
+        # Reset
+        self.reset(step=True)
+
+        # Configuration
+        if ctrl_names is None:
+            ctrl_names = self.ctrl_names # default is to use revolute joints
+        idxs = get_idxs(self.ctrl_names,ctrl_names)
+        if init_ctrl is None:
+            init_ctrl = self.get_ctrl(ctrl_names=ctrl_names)
+        resolution = 0.1
+        sliders = MultiSliderClass(
+            n_slider      = len(ctrl_names),
+            title         = 'Sliders for [%s] Control'%(self.name),
+            window_width  = 600,
+            window_height = 800,
+            x_offset      = 300,
+            y_offset      = 200,
+            slider_width  = 450,
+            label_texts   = [self.ctrl_names[idx] for idx in idxs],
+            slider_mins   = [self.ctrl_ranges[idx,0] for idx in idxs],
+            slider_maxs   = [self.ctrl_ranges[idx,1] for idx in idxs],
+            slider_vals   = init_ctrl,
+            resolution    = resolution,
+            verbose       = False,
+        )
+
+        # Initialize viewer
+        self.init_viewer(
+            transparent = transparent,
+            azimuth     = azimuth,
+            distance    = distance,
+            elevation   = elevation,
+            lookat      = lookat,
+        )
+
+        # Loop
+        while self.is_viewer_alive():
+            # Update
+            sliders.update() # update slider
+            self.step(ctrl=sliders.get_slider_values(),ctrl_idxs=idxs)
+            # Render
+            if self.loop_every(tick_every=plot_every):
+                self.plot_T(p=np.array([0,0,0]),R=np.eye(3,3))
+                self.plot_time()
+                self.plot_contact_info(r_arrow=0.005,h_arrow=0.1,plot_sphere=False,verbose=False)
+                self.plot_joint_axis(
+                    axis_len    = axis_len,
+                    axis_r      = axis_r,
+                    joint_names = None,
+                )
+                self.render()
+
+        # Close
+        self.close_viewer()
+        sliders.close()
+
+    def remove_all_geoms(self, prefix: str = None):
+        """
+            Clear all markers (decorative geometries) that were added to the viewer via
+            the plotting helper functions. If a *prefix* string is given, only markers
+            whose ``label`` begins with that prefix are removed, leaving others intact.
+
+            This works with both supported viewer back-ends:
+              • MujocoMinimalViewer stores markers directly in ``_markers``.
+              • MujocoPythonViewer wraps an internal viewer instance in the attribute
+                ``_viewer`` that in turn stores its marker list in ``_markers``.
+        """
+        try:
+            # Handle minimal viewer backend where markers live directly on the viewer
+            if hasattr(self.viewer, "_markers"):
+                if prefix is None:
+                    self.viewer._markers.clear()
+                else:
+                    self.viewer._markers[:] = [
+                        m for m in self.viewer._markers
+                        if not (isinstance(m.get("label", ""), str) and m.get("label", "").startswith(prefix))
+                    ]
+            # Handle python viewer backend (viewer._viewer)
+            if hasattr(self.viewer, "_viewer") and hasattr(self.viewer._viewer, "_markers"):
+                if prefix is None:
+                    self.viewer._viewer._markers.clear()
+                else:
+                    self.viewer._viewer._markers[:] = [
+                        m for m in self.viewer._viewer._markers
+                        if not (isinstance(m.get("label", ""), str) and m.get("label", "").startswith(prefix))
+                    ]
+        except Exception as e:
+            if getattr(self, "verbose", False):
+                print(f"[MuJoCoParserClass.remove_all_geoms] Warning: {e}")
+
     def plot_traj(
             self,
             traj,

@@ -56,10 +56,8 @@ def main(
         smt_sigma   = 5.0, # Gaussian smoothing sigma
         smt_radius  = 5.0, # Gaussian smoothing radius (filter size)
         verbose     = True,
-        plot        = True,
+        plot        = False,
     )
-    rcontact_segs_concat = np.concatenate(rcontact_segs) # [M]
-    lcontact_segs_concat = np.concatenate(lcontact_segs) # [M]
     for c_idx,rcontact_seg in enumerate(rcontact_segs):
         print ("Right Contact [%d/%d] [%d]~[%d]"%
             (c_idx,len(rcontact_segs),rcontact_seg[0],rcontact_seg[-1]))
@@ -79,9 +77,6 @@ def main(
         chain = chains[tick]
         T_joi_src = get_T_joi_from_chain_cmu(chain,hip_between_pelvis=True)
 
-        # Contact label
-        rcontact = tick in rcontact_segs_concat
-        lcontact = tick in lcontact_segs_concat
 
         # Move target base with fallback option
         # IMPORTANT: Set UPDATE_BASE_EVERY_FRAME to True for full motion retargeting
