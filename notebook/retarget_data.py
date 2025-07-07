@@ -22,6 +22,17 @@ from bvh_parser import *
 from joi import *
 from mr_cmu import *
 
+MEDIAPIPE_LANDMARKS = {
+    'nose': 0, 'left_eye_inner': 1, 'left_eye': 2, 'left_eye_outer': 3, 'right_eye_inner': 4,
+    'right_eye': 5, 'right_eye_outer': 6, 'left_ear': 7, 'right_ear': 8, 'mouth_left': 9,
+    'mouth_right': 10, 'left_shoulder': 11, 'right_shoulder': 12, 'left_elbow': 13, 'right_elbow': 14,
+    'left_wrist': 15, 'right_wrist': 16, 'left_pinky': 17, 'right_pinky': 18, 'left_index': 19,
+    'right_index': 20, 'left_thumb': 21, 'right_thumb': 22, 'left_hip': 23, 'right_hip': 24,
+    'left_knee': 25, 'right_knee': 26, 'left_ankle': 27, 'right_ankle': 28, 'left_heel': 29,
+    'right_heel': 30, 'left_foot_index': 31, 'right_foot_index': 32
+}
+    
+    
 
 def load_video_to_frames(input_mp4: str, fps: int = 20):
     input_basename = os.path.basename(input_mp4)
@@ -302,17 +313,7 @@ def estimate_3d_pose(poses_data: list):
 def save_bvh(poses3d: list, output_bvh: str, fps: int = 20):
     os.makedirs(os.path.dirname(output_bvh), exist_ok=True)
     
-    MEDIAPIPE_LANDMARKS = {
-        'nose': 0, 'left_eye_inner': 1, 'left_eye': 2, 'left_eye_outer': 3, 'right_eye_inner': 4,
-        'right_eye': 5, 'right_eye_outer': 6, 'left_ear': 7, 'right_ear': 8, 'mouth_left': 9,
-        'mouth_right': 10, 'left_shoulder': 11, 'right_shoulder': 12, 'left_elbow': 13, 'right_elbow': 14,
-        'left_wrist': 15, 'right_wrist': 16, 'left_pinky': 17, 'right_pinky': 18, 'left_index': 19,
-        'right_index': 20, 'left_thumb': 21, 'right_thumb': 22, 'left_hip': 23, 'right_hip': 24,
-        'left_knee': 25, 'right_knee': 26, 'left_ankle': 27, 'right_ankle': 28, 'left_heel': 29,
-        'right_heel': 30, 'left_foot_index': 31, 'right_foot_index': 32
-    }
-    
-    
+
     bvh_frames = []
     for frame_idx, landmarks in enumerate(poses3d):
         try:
@@ -763,6 +764,17 @@ def run(
     poses_data = estimate_2d_pose(frames)
     poses3d = estimate_3d_pose(poses_data)
     
+    # ------------------------------------------------------------------
+    # Save raw 3-D landmarks for later IK retargeting
+    # ------------------------------------------------------------------
+    keypoints_pkl = os.path.join(output_dir, "keypoints_raw.pkl")
+    try:
+        with open(keypoints_pkl, "wb") as f:
+            pickle.dump(poses3d, f)
+        print(f"✅ 3-D key-points saved: {keypoints_pkl}  (frames: {len(poses3d)})")
+    except Exception as e:
+        print(f"[WARN] Could not save key-points pickle: {e}")
+
     input_basename = os.path.basename(input_mp4).split('.')[0]
     if do_gif:
         pose_3d_gif = os.path.join(viz_dir, f"{input_basename}_3d_pose.gif")

@@ -82,7 +82,9 @@ class ActorClass(nn.Module):
                  init_alpha = 0.1,
                  lr_actor   = 0.0003,
                  lr_alpha   = 0.0003,
-                 device     = None) -> None:
+                 device     = None,
+                 use_amp    = True,
+                 ) -> None:
         super(ActorClass, self).__init__()
         # Initialize
         self.name       = name
@@ -94,12 +96,16 @@ class ActorClass(nn.Module):
         self.lr_actor   = lr_actor
         self.lr_alpha   = lr_alpha
         self.device     = device
+        self.use_amp    = use_amp and (device is not None and 'cuda' in str(device))
         self.init_layers()
         self.init_params()
         # Set optimizer
         self.actor_optimizer = optim.Adam(self.parameters(), lr=self.lr_actor)
         self.log_alpha = torch.tensor(np.log(self.init_alpha),requires_grad=True,dtype=torch.float32,device=self.device)
         self.log_alpha_optimizer = optim.Adam([self.log_alpha], lr=self.lr_alpha)
+        
+        # AMP scaler (only if CUDA available and use_amp)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
         
     def init_layers(self):
         """
@@ -145,10 +151,16 @@ class ActorClass(nn.Module):
         x = x.to(self.device)
         for h_idx, _ in enumerate(self.h_dims):
             x = self.layers['relu_{}'.format(h_idx)](self.layers['mlp_{}'.format(h_idx)](x))
-        # Compute mean and std
-        mean = self.layers['mu'](x)
-        # std  = F.softplus(self.layers['std'](x)) + 1e-6
-        std = torch.sigmoid(self.layers['std'](x))
+        # Compute mean and a numerically safe std -------------------------------------------------
+        mean_raw = self.layers['mu'](x)
+        log_std_raw = self.layers['std'](x)
+        # Clamp log_std to avoid extremely small/large std values
+        log_std = torch.clamp(log_std_raw, min=-20, max=2)
+        std = log_std.exp()
+        # Replace potential NaNs / Infs that slipped through
+        mean = torch.nan_to_num(mean_raw, nan=0.0, posinf=0.0, neginf=0.0)
+        std  = torch.nan_to_num(std,  nan=1.0, posinf=1.0, neginf=1.0)
+        std  = torch.clamp(std, min=1e-6)  # ensure strictly positive
         # Define Gaussian
         GaussianDistribution = Normal(mean, std)
         # Sample action
@@ -158,9 +170,11 @@ class ActorClass(nn.Module):
             action = mean
         # Compute log prob
         log_prob = GaussianDistribution.log_prob(action)
-        # Normalize action
+        # Normalize action and make sure no NaNs propagate
         real_action = torch.tanh(action) * self.max_out
+        real_action = torch.nan_to_num(real_action, nan=0.0, posinf=self.max_out, neginf=-self.max_out)
         real_log_prob = log_prob - torch.log(self.max_out*(1-torch.tanh(action).pow(2)) + 1e-6)
+        real_log_prob = torch.nan_to_num(real_log_prob, nan=0.0, posinf=0.0, neginf=0.0)
         return real_action, real_log_prob
     
     def train(self,
@@ -172,25 +186,30 @@ class ActorClass(nn.Module):
             Train
         """
         s, _, _, _, _ = mini_batch
-        a, log_prob = self.forward(s)
-        entropy = -self.log_alpha.exp() * log_prob 
-        
-        q_1_value = q_1(s, a)
-        q_2_value = q_2(s, a)
-        q_1_q_2_value = torch.cat([q_1_value, q_2_value], dim=1)
-        min_q_value   = torch.min(q_1_q_2_value, 1, keepdim=True)[0]
-        
-        # Update actor
-        actor_loss = -min_q_value -entropy # Eq. (7)
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            a, log_prob = self.forward(s)
+            entropy = -self.log_alpha.exp() * log_prob
+
+            q_1_value = q_1(s, a)
+            q_2_value = q_2(s, a)
+            q_1_q_2_value = torch.cat([q_1_value, q_2_value], dim=1)
+            min_q_value   = torch.min(q_1_q_2_value, 1, keepdim=True)[0]
+
+            actor_loss = (-min_q_value - entropy).mean()  # Eq. (7)
+
+        # Scale actor loss and step
         self.actor_optimizer.zero_grad()
-        actor_loss.mean().backward()
-        self.actor_optimizer.step()
-        
-        # Automating Entropy Adjustment
+        self.scaler.scale(actor_loss).backward()
+        self.scaler.step(self.actor_optimizer)
+
+        # Entropy (alpha) update (no amp to keep it stable)
         alpha_loss = -(self.log_alpha.exp() * (log_prob+target_entropy).detach()).mean()
         self.log_alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
+
+        # Update scaler
+        self.scaler.update()
         
 # Critic
 class CriticClass(nn.Module):
@@ -201,7 +220,9 @@ class CriticClass(nn.Module):
                  h_dims    = [256,256],
                  out_dim   = 1,
                  lr_critic = 0.0003,
-                 device    = None) -> None:
+                 device    = None,
+                 use_amp   = True,
+                 ) -> None:
         """
             Initialize Critic
         """
@@ -214,10 +235,14 @@ class CriticClass(nn.Module):
         self.out_dim   = out_dim
         self.lr_critic = lr_critic
         self.device    = device
+        self.use_amp   = use_amp and (device is not None and 'cuda' in str(device))
         self.init_layers()
         self.init_params()
         # Set optimizer
         self.critic_optimizer = optim.Adam(self.parameters(),lr=self.lr_critic)
+
+        # AMP scaler (only if CUDA available and use_amp)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
 
     def init_layers(self):
         """
@@ -284,10 +309,13 @@ class CriticClass(nn.Module):
             Train
         """
         s, a, r, s_prime, done = mini_batch
-        critic_loss = F.smooth_l1_loss(self.forward(s,a), target)
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            critic_loss = F.smooth_l1_loss(self.forward(s,a), target)
+
         self.critic_optimizer.zero_grad()
-        critic_loss.mean().backward()
-        self.critic_optimizer.step()
+        self.scaler.scale(critic_loss.mean()).backward()
+        self.scaler.step(self.critic_optimizer)
+        self.scaler.update()
         
     def soft_update(self, tau, net_target):
         """

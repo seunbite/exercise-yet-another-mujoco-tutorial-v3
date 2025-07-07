@@ -10,8 +10,10 @@ class MujocoPythonViewer:
         model: mujoco.MjModel,
         data: mujoco.MjData,
         title: str = "MuJoCo Python Viewer",
+        width: int = 1024,
+        height: int = 768,
     ) -> None:
-        self._viewer = mj_viewer.MujocoViewer(model, data, title=title)
+        self._viewer = mj_viewer.MujocoViewer(model, data, title=title, width=width, height=height, hide_menus=True)
         self.model = model
         self.data = data
         self.cam = self._viewer.cam

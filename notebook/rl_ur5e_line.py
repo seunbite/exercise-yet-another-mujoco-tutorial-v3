@@ -23,6 +23,8 @@ from transformation import r2rpy, rpy2r, pr2t, t2p, t2r
 from utility import get_colors, d2r, trim_scale, np2torch, torch2np
 from sac import ReplayBufferClass, ActorClass, CriticClass, get_target
 import cv2
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 
@@ -67,6 +69,7 @@ class UR5eHeadTouchEnv:
         self.reward_mean = 0.0
         self.reward_std = 1.0
         self.reward_count = 0
+        self.heatmap_dots = []
         
         # Add tracking for directional movement reward
         self.prev_tip_pos = None
@@ -115,6 +118,14 @@ class UR5eHeadTouchEnv:
         self.tick_history = np.zeros((self.n_history, 1))
         self.o_dim = len(self.get_observation())
         self.a_dim = len(self.joint_names)
+
+        # -----------------------------------------------------------------------------------
+        # Heat-map buffers
+        #   Each element is (u, v, reward) where
+        #     u = 0 at start, 1 at end, >1 beyond; v = perpendicular distance (m)
+        # -----------------------------------------------------------------------------------
+        self._heat_before_start = []  # data collected while not start_reached
+        self._heat_after_start  = []  # data collected once start_reached is True
 
     def compute_gradient_norm(self, model):
         total_norm = 0.0
@@ -336,29 +347,26 @@ class UR5eHeadTouchEnv:
         }
         
         return reward, reward_components
-    
+
     def reward_1_5(self, applicator_tip_pos, current_distance_start, current_distance_end):
         r_START_TOUCH = 0
-        r_END_TOUCH = 100
+        r_END_TOUCH = 10
         r_TIME = -0.00001
-        c_START_TOUCH = 0.0
         w_START_TOUCH = -0.2
-        w_DISTANCE_IMPROVEMENT = 2.0  # Positive weight for distance improvement
-        w_DIRECTIONAL_MOVEMENT = 1.0  # Positive weight for directional movement
-        w_STAY_STILL_PENALTY = -0.01  # Penalty for staying still after start reached
-        stay_still_threshold = 0.001  # Threshold for considering "staying still" (1mm)
+        w_END_TOUCH = 0.01
+        w_DISTANCE_IMPROVEMENT = 1
+        w_ABSOLUTE_DISTANCE = 1.0  # scaling for absolute distance reward (kept within ±0.5)
 
         reward = 0.0
         r_start_distance = 0.0
         r_in_progress = 0.0
-        r_line_dev = 0.0
+        r_absolute_distance = 0.0
         r_directional_movement = 0.0
-        r_stay_still_penalty = 0.0
         stop_rewarding = False
         
         if not self.start_reached:
             delta_d = current_distance_start
-            r_start_distance = delta_d * w_START_TOUCH + c_START_TOUCH
+            r_start_distance = delta_d * w_START_TOUCH
             
             if current_distance_start < self.touch_threshold:
                 print("Start point reached!")
@@ -367,60 +375,124 @@ class UR5eHeadTouchEnv:
                 stop_rewarding = True
             
         if self.start_reached and not self.end_reached and not stop_rewarding:
-            # Initialize tracking variables if first time after start_reached
             if self.prev_tip_pos is None:
                 self.prev_tip_pos = applicator_tip_pos.copy()
                 self.prev_distance_to_end = current_distance_end
-                self.still_counter = 0  # Counter for consecutive still steps
             
-            # Calculate movement vector and direction
             movement_vector = applicator_tip_pos - self.prev_tip_pos
             movement_magnitude = np.linalg.norm(movement_vector)
-            
-            # Line direction (from start to end)
             line_direction = self.target_line[1] - self.target_line[0]
             
-            # r_directional_movement: positive reward for moving in line direction
             r_directional_movement = 0.0
             if movement_magnitude > 1e-6 and self.target_line_length > 1e-6:
                 movement_dir_normalized = movement_vector / movement_magnitude
                 line_dir_normalized = line_direction / self.target_line_length
                 direction_alignment = np.dot(movement_dir_normalized, line_dir_normalized)
-                # Positive reward when aligned with line direction (0 to w_DIRECTIONAL_MOVEMENT)
-                r_directional_movement = max(0, direction_alignment) * w_DIRECTIONAL_MOVEMENT
-            
-            # r_in_progress: positive reward for getting closer to end point
-            distance_improvement = self.prev_distance_to_end - current_distance_end
-            r_in_progress = max(0, distance_improvement) * w_DISTANCE_IMPROVEMENT  # Only positive when getting closer
-            
-            # Check if staying still and apply exponential penalty
-            if movement_magnitude < stay_still_threshold:
-                self.still_counter += 1
-                # Exponential penalty that increases with consecutive still steps
-                r_stay_still_penalty = w_STAY_STILL_PENALTY * (1.5 ** self.still_counter)
+                r_directional_movement = (direction_alignment - 1.0) * w_END_TOUCH  # Range: [-0.02, 0]
             else:
-                self.still_counter = 0  # Reset counter when moving
-                r_stay_still_penalty = 0.0
+                r_directional_movement = -0.005
             
-            # Update tracking variables
+            distance_improvement = self.prev_distance_to_end - current_distance_end
+            r_in_progress = distance_improvement * w_DISTANCE_IMPROVEMENT
+            
+            # ---------------- Absolute distance term ----------------
+            # Map current_distance_end ∈ [0, line_length] → reward ∈ [+0.5, -0.5]
+            progress = 1 - (current_distance_end / max(self.target_line_length, 1e-6))
+            # progress: 0 at start, 1 at end
+            r_absolute_distance = (progress - 0.5) * w_ABSOLUTE_DISTANCE
+            r_absolute_distance = float(np.clip(r_absolute_distance, -0.5, 0.5))
+            
             self.prev_tip_pos = applicator_tip_pos.copy()
             self.prev_distance_to_end = current_distance_end
-            
-            r_line_dev = 0.0
             
             if current_distance_end < self.touch_threshold:
                 self.end_reached = True
                 reward += r_END_TOUCH
                 print("End point reached!")
         
-        reward += r_start_distance + r_in_progress + r_line_dev + r_TIME + r_directional_movement + r_stay_still_penalty
+        reward += r_start_distance + r_in_progress + r_absolute_distance + r_TIME + r_directional_movement
 
         reward_components = {
             'r_time': r_TIME,
             'r_start_distance': r_start_distance,
             'r_in_progress': r_in_progress,
             'r_directional_movement': r_directional_movement,
-            'r_stay_still_penalty': r_stay_still_penalty,
+            'r_absolute_distance': r_absolute_distance,
+        }
+        
+        return reward, reward_components
+    
+    def reward_1_6(self, applicator_tip_pos, current_distance_start, current_distance_end):
+        r_START_TOUCH = -0.2
+        w_START_TOUCH = -0.1  # constant penalty before start reached
+        r_END_TOUCH = 10
+        w_END_TOUCH = 0.1     # scale for directional movement (will be clipped to [-0.1,0])
+        r_TIME = -0.00001
+        w_DISTANCE_IMPROVEMENT = 0.1
+        w_ABSOLUTE_DISTANCE = 0.1  # now r_absolute_distance ∈ [-0.1,0]
+        r_ON_THE_LINE = 0.2
+
+        reward = 0.0
+        r_start_distance = 0.0
+        r_in_progress = 0.0
+        r_absolute_distance = 0.0
+        r_directional_movement = 0.0
+        stop_rewarding = False
+        
+        if not self.start_reached:
+            r_start_distance = current_distance_start * w_START_TOUCH + r_START_TOUCH
+            
+            if current_distance_start < self.touch_threshold:
+                print("Start point reached!")
+                self.start_reached = True
+                stop_rewarding = True
+            
+        if self.start_reached and not self.end_reached and not stop_rewarding:
+            if self.prev_tip_pos is None:
+                self.prev_tip_pos = applicator_tip_pos.copy()
+                self.prev_distance_to_end = current_distance_end
+            
+            movement_vector = applicator_tip_pos - self.prev_tip_pos
+            movement_magnitude = np.linalg.norm(movement_vector)
+            line_direction = self.target_line[1] - self.target_line[0]
+            
+            r_directional_movement = 0.0
+            if movement_magnitude > 1e-6 and self.target_line_length > 1e-6:
+                movement_dir_normalized = movement_vector / movement_magnitude
+                line_dir_normalized = line_direction / self.target_line_length
+                direction_alignment = np.dot(movement_dir_normalized, line_dir_normalized)
+                r_directional_movement = np.clip((direction_alignment - 1.0) * w_END_TOUCH, -0.1, 0.0)
+            else:
+                r_directional_movement = -0.1  # maximum penalty when not moving
+            
+            distance_improvement = self.prev_distance_to_end - current_distance_end
+            r_in_progress = distance_improvement * w_DISTANCE_IMPROVEMENT
+            
+            progress = 1 - (current_distance_end / max(self.target_line_length, 1e-6))  # 0 at start,1 at end
+            r_absolute_distance = np.clip((progress - 1.0) * (-w_ABSOLUTE_DISTANCE), -0.1, 0.0)  # [-0.1,0]
+
+            line_deviation = self._get_distance_from_line()
+            self.over_perpendicular_plane = np.dot(line_direction, applicator_tip_pos - self.target_line[1]) > 0
+            
+            if line_deviation <= self.touch_threshold and r_in_progress > 0.0 and not self.over_perpendicular_plane:
+                reward += r_ON_THE_LINE
+            
+            self.prev_tip_pos = applicator_tip_pos.copy()
+            self.prev_distance_to_end = current_distance_end
+            
+            if current_distance_end < self.touch_threshold:
+                self.end_reached = True
+                reward += r_END_TOUCH
+                print("End point reached!")
+            
+        reward += r_start_distance + r_in_progress + r_absolute_distance + r_TIME + r_directional_movement
+
+        reward_components = {
+            'r_time': r_TIME,
+            'r_start_distance': r_start_distance,
+            'r_in_progress': r_in_progress,
+            'r_directional_movement': r_directional_movement,
+            'r_absolute_distance': r_absolute_distance,
         }
         
         return reward, reward_components
@@ -675,6 +747,8 @@ class UR5eHeadTouchEnv:
             reward, reward_components = self.reward_1(applicator_tip_pos, current_distance_start, current_distance_end)
         elif str(self.reward_mode) == '1.5':
             reward, reward_components = self.reward_1_5(applicator_tip_pos, current_distance_start, current_distance_end)
+        elif str(self.reward_mode) == '1.6':
+            reward, reward_components = self.reward_1_6(applicator_tip_pos, current_distance_start, current_distance_end)
         elif str(self.reward_mode) == '2':
             reward, reward_components = self.reward_2(applicator_tip_pos, current_distance_start, current_distance_end)
         elif str(self.reward_mode) == '3':
@@ -708,6 +782,13 @@ class UR5eHeadTouchEnv:
             'done': done
         }
         
+        # ----------------- Heat-map logging -----------------
+        u, v = self._get_relative_coords(applicator_tip_pos)
+        if not self.start_reached:
+            self._heat_before_start.append((u, v, reward))
+        else:
+            self._heat_after_start.append((u, v, reward))
+
         return reward, reward_components, state_info
 
     def step(self, action, max_time=np.inf):
@@ -787,8 +868,8 @@ class UR5eHeadTouchEnv:
         if use_dynamic_target:
             # Dynamic target positioning - harder, more varied
             self.target_pos_start = self._dynamic_target(self.head_position, x=[0.03, 0.03], y=[0.0, 0.03], z=[0.15, 0.18])
-            self.target_line_length = random.uniform(0.1, 0.15)
-            z_offset = np.random.uniform(0.05, 0.15) * np.random.choice([-1, 1])
+            self.target_line_length = random.uniform(0.1, 0.13)
+            z_offset = np.random.uniform(0.05, 0.10) * np.random.choice([-1, 1])
             line_direction = np.array([np.random.choice([-1, 1]), np.random.uniform(-0.5, 0.5), z_offset / self.target_line_length])
             line_direction = line_direction / np.linalg.norm(line_direction)
         else:
@@ -839,9 +920,9 @@ class UR5eHeadTouchEnv:
             
             if hasattr(self, 'target_line'):
                 if not self.start_reached:
-                    self.env.plot_line_fr2to(p_fr=tip_pos, p_to=self.target_line[0], rgba=[1, 0.5, 0, 0.4])
+                    self.env.plot_line_fr2to(p_fr=tip_pos, p_to=self.target_line[0], rgba=[1, 0.5, 0, 1])
                 elif not self.end_reached:
-                    self.env.plot_line_fr2to(p_fr=tip_pos, p_to=self.target_line[1], rgba=[0, 0.5, 1, 0.4])
+                    self.env.plot_line_fr2to(p_fr=tip_pos, p_to=self.target_line[1], rgba=[0, 0.5, 1, 1])
         
         if PLOT_DISTANCE and hasattr(self, 'target_line'):
             start_dist = self.get_distance(self.get_applicator_tip_pos(), self.target_line[0])
@@ -865,7 +946,7 @@ class UR5eHeadTouchEnv:
             reward_text = f'R: {self.latest_reward:.3f}'
             for key, value in self.latest_reward_components.items():
                 if abs(value) > 1e-6:
-                    reward_text += f' | {key}: {value:.3f}'
+                    reward_text += f' | {key[:5]}: {value:.3f}'
             
             # Display cumulative episode statistics
             if PLOT_STATS and hasattr(self, 'total_episodes'):
@@ -914,6 +995,88 @@ class UR5eHeadTouchEnv:
     def get_sim_time(self):
         return self.env.get_sim_time()
 
+    # ================================================================
+    # Heat-map helpers
+    # ================================================================
+    def _get_relative_coords(self, tip_pos):
+        """Return (u, v) coordinates relative to the current target line.
+
+        u : normalized coordinate along the line (0 = start, 1 = end)
+        v : perpendicular distance (always >= 0)
+        """
+        if not hasattr(self, 'target_line'):
+            return 0.0, 0.0
+        start_pt, end_pt = self.target_line
+        line_vec = end_pt - start_pt
+        line_len = np.linalg.norm(line_vec)
+        if line_len < 1e-6:
+            return 0.0, 0.0
+        line_dir = line_vec / line_len
+        rel_vec  = tip_pos - start_pt
+        proj_len = np.dot(rel_vec, line_dir)
+        u = proj_len / line_len  # can be <0 or >1 when outside segment
+        perp_vec = rel_vec - proj_len * line_dir
+        v = np.linalg.norm(perp_vec)
+        return float(u), float(v)
+    
+    def fixed_status(self, dots):
+
+        if len(dots) == 0:
+            return np.array([]), np.array([]), np.array([])
+
+        xs, ys, cs = [], [], []
+        for tip, start, end, _, reward in dots:
+            tip   = np.asarray(tip)
+            start = np.asarray(start)
+            end   = np.asarray(end)
+            line_vec = end - start
+            line_len = np.linalg.norm(line_vec)
+            if line_len < 1e-9:
+                continue
+            line_dir = line_vec / line_len
+            rel_vec  = tip - start
+            proj_len = np.dot(rel_vec, line_dir)
+            u = proj_len / line_len  # 0 at start, 1 at end
+            perp_vec = rel_vec - proj_len * line_dir
+            # signed v: sign by dot with arbitrary perpendicular vector (here z-axis cross)
+            v = np.linalg.norm(perp_vec)
+            xs.append(u)
+            ys.append(v)
+            cs.append(reward)
+        return np.array(xs), np.array(ys), np.array(cs)
+
+    def save_heatmaps(self, filepath, cmap='turbo', u_lim=(-0.3, 1.3), v_lim=(-0.2, 0.2)):
+        # Split dots
+        before = [d for d in self.heatmap_dots if d[3] is False]
+        after  = [d for d in self.heatmap_dots if d[3] is True]
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
+
+        for ax, title, dots in zip(axes, ['Before start_reached', 'After start_reached'], [before, after]):
+            xs, ys, cs = self.fixed_status(dots)
+            if xs.size > 0:
+                vmin_global, vmax_global = -2.0, 2.0
+                sc = ax.scatter(xs, ys, c=cs, cmap=cmap, s=8, vmin=vmin_global, vmax=vmax_global)
+                fig.colorbar(sc, ax=ax, label='reward', extend='both')
+
+            ax.plot([0, 1], [0, 0], 'k-', lw=2)
+            ax.scatter([0], [0], c='green', s=50, label='start')
+            ax.scatter([1], [0], c='blue',  s=50, label='end')
+            ax.set_xlim(u_lim)
+            ax.set_ylim(v_lim)
+            ax.set_xlabel('u (along line)')
+            ax.set_title(f"{title} (dot N={len(dots)})")
+        axes[0].set_ylabel('v (perpendicular distance)')
+
+        fig.suptitle(f"episode {filepath.split('/')[-1].split('.')[0]}")
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.savefig(filepath, dpi=150)
+        plt.close(fig)
+        print(f"[Heat-map] saved {filepath}")
+        self.heatmap_dots = []
+
+        return
+
 
 def train_ur5e_sac(
     xml_path='../asset/makeup_frida/scene_table.xml',
@@ -921,7 +1084,7 @@ def train_ur5e_sac(
     test_only=False,
     start_reached=False,
     n_test_episodes=3,
-    dynamic_target=10.0,
+    dynamic_target=0, # 0 means do dynamic target, 100 means do static target
     result_path=None,
     do_render=True,
     do_log=True,
@@ -941,22 +1104,18 @@ def train_ur5e_sac(
     tau=0.005,
     print_every=1,
     save_every_episode=50,
+    plot_heatmap_every_episode=10,
     seed=0,
     train_from_checkpoint=None,
     ):
-    """
-    Train UR5e with SAC algorithm for head touch task.
-    
-    Args:
-        dynamic_target (float): Success rate threshold (%) for switching to dynamic targets.
-                               When mean end success rate >= this value, targets become dynamic.
-                               Example: 10.0 means switch when success rate reaches 10%.
-                               This enables curriculum learning: static targets (easier) → dynamic targets (harder).
-    """
+
     now_date = strftime("%Y-%m-%d")
     now_time = strftime("%H-%M-%S")
     if result_path is None:
         result_path = f'./result/weights/{now_date}_sac_ur5e/'
+    # Directory for heatmaps: ./result/heatmap/{now_time}/
+    heatmap_dir = f'./result/heatmap/{now_time}/'
+    os.makedirs(heatmap_dir, exist_ok=True)
 
     if test_only:
         print("=== TESTING MODE ===")
@@ -1064,9 +1223,9 @@ def train_ur5e_sac(
     critic_two = CriticClass(**critic_arg).to(device)
     critic_one_trgt = CriticClass(**critic_arg).to(device)
     critic_two_trgt = CriticClass(**critic_arg).to(device)
-    
+
     # Load checkpoint if specified
-    start_episode = 0
+    start_episode = 0  # Always start counting episodes from 0 even when loading a checkpoint
     if train_from_checkpoint is not None:
         if os.path.exists(train_from_checkpoint):
             print(f"Loading checkpoint from: {train_from_checkpoint}")
@@ -1086,10 +1245,9 @@ def train_ur5e_sac(
                     if 'critic_two_trgt_state_dict' in checkpoint:
                         critic_two_trgt.load_state_dict(checkpoint['critic_two_trgt_state_dict'])
                     if 'episode' in checkpoint:
-                        start_episode = checkpoint['episode']
-                        print(f"Resuming from episode: {start_episode}")
+                        resume_ep = checkpoint['episode']
+                        print(f"Loaded checkpoint (was saved at episode {resume_ep}), but will train a fresh horizon of {n_episode} episodes.")
                     
-                    # Load optimizer states (will be set after optimizers are created)
                     loaded_optimizers = {}
                     if 'actor_optimizer_state_dict' in checkpoint and checkpoint['actor_optimizer_state_dict'] is not None:
                         loaded_optimizers['actor'] = checkpoint['actor_optimizer_state_dict']
@@ -1100,27 +1258,22 @@ def train_ur5e_sac(
                     if 'critic_two_optimizer_state_dict' in checkpoint and checkpoint['critic_two_optimizer_state_dict'] is not None:
                         loaded_optimizers['critic_two'] = checkpoint['critic_two_optimizer_state_dict']
                     
-                    # Store for later loading after optimizers are initialized
                     actor._loaded_optimizer_states = loaded_optimizers
                     
                     print("Loaded full checkpoint with model states and optimizers")
                 else:
-                    # Simple checkpoint with just actor state_dict
                     actor.load_state_dict(checkpoint)
                     
-                    # Try to extract episode number from filename
-                    filename = os.path.basename(train_from_checkpoint)
-                    if 'episode_' in filename:
-                        try:
-                            start_episode = int(filename.split('episode_')[-1].split('.')[0])
-                            print(f"Extracted episode number from filename: {start_episode}")
-                        except:
-                            print("Could not extract episode number from filename")
-                    
-                    print("Loaded simple checkpoint with actor state only")
+                filename = os.path.basename(train_from_checkpoint)
+                if 'episode_' in filename:
+                    try:
+                        start_episode = int(filename.split('episode_')[-1].split('.')[0])
+                        print(f"Extracted episode number from filename: {start_episode}")
+                    except:
+                        print("Could not extract episode number from filename")
                 
-                print("Checkpoint loaded successfully!")
-                
+                print("Loaded simple checkpoint with actor state only")
+            
             except Exception as e:
                 print(f"Error loading checkpoint: {e}")
                 print("Starting training from scratch...")
@@ -1205,7 +1358,6 @@ def train_ur5e_sac(
     for epi_idx in tqdm(range(start_episode, end_episode + 1)):
         # Calculate progression from 0 to 1 based on current training progress
         progress = (epi_idx - start_episode) / n_episode
-        zero_to_one = progress
         one_to_zero = 1 - progress
         
         s = gym.reset()
@@ -1225,6 +1377,7 @@ def train_ur5e_sac(
             
             # Step environment
             s_prime, reward, done, info = gym.step(a_np, max_time=max_epi_sec)
+            gym.heatmap_dots.append((gym.get_applicator_tip_pos(), gym.target_line[0], gym.target_line[1], gym.start_reached, reward))
             replay_buffer.put((s, a_np, reward, s_prime, done))
             
             reward_total += reward
@@ -1309,6 +1462,10 @@ def train_ur5e_sac(
             final_reward = reward
             print(f"[{epi_idx}/{n_episode}] final_reward: [{final_reward:.3f}] start: [{info['start_reached']}] end: [{info['end_reached']}] sum_reward:[{reward_total:.2f}] start_distance:[{start_distance:.3f}] end_distance:[{end_distance:.3f}] epi_len:[{tick}/{max_epi_tick}] buffer_size:[{replay_buffer.size()}] alpha:[{actor.log_alpha.exp():.2f}]")
         
+        if (epi_idx % plot_heatmap_every_episode) == 0:
+            heatmap_path = os.path.join(heatmap_dir, f'{epi_idx}.png')
+            gym.save_heatmaps(filepath=heatmap_path)
+            
         if (epi_idx % save_every_episode) == 0 and epi_idx > 0:
             pth_path = f'./result/weights/{now_date}_sac_{gym.name.lower()}/episode_{epi_idx}.pth'
             dir_path = os.path.dirname(pth_path)
@@ -1319,7 +1476,7 @@ def train_ur5e_sac(
             torch.save(actor.state_dict(), pth_path)
             
             # Save complete checkpoint for resuming training
-            checkpoint_path = f'./result/weights/{now_date}_sac_{gym.name.lower()}/checkpoint_episode_{epi_idx}.pth'
+            checkpoint_path = f'./result/weights/{now_date}_sac_{gym.name.lower()}/episode_{epi_idx}.pth'
             checkpoint = {
                 'episode': epi_idx,
                 'actor_state_dict': actor.state_dict(),
@@ -1349,6 +1506,8 @@ def train_ur5e_sac(
     
     if do_render and gym.is_viewer_alive():
         gym.close_viewer()
+
+
 
     
 def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=False, n_test_episodes=3, gif_path='tmp.gif'):

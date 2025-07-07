@@ -306,12 +306,14 @@ class MuJoCoParserClass(object):
                 maxgeom    = maxgeom,
             )
             self.viewer.ctx = mujoco.MjrContext(self.model,fontscale)
-        else:
+        elif backend == 'native':
             self.viewer = MujocoPythonViewer(
                 self.model,
                 self.data,
                 title=title,
             )
+        else:
+            raise ValueError(f"Unknown viewer backend: {backend}. Choose 'minimal' or 'native'.")
 
         # Apply viewer settings
         self.set_viewer(
@@ -3024,6 +3026,7 @@ def solve_ik(
         env,
         joint_names_for_ik,
         body_name_trgt,
+        do='forward',
         q_init          = None, # IK start from the initial pose
         p_trgt          = None,
         R_trgt          = None,
@@ -3080,7 +3083,11 @@ def solve_ik(
         )
         q_curr = q_curr + dq[joint_idxs_jac] # update
         q_curr = np.clip(q_curr,q_mins,q_maxs) # clip
-        env.forward(q=q_curr,joint_idxs=joint_idxs_fwd,increase_tick=False) # fk
+
+        if do == 'step':
+            env.step(ctrl=q_curr,ctrl_idxs=joint_idxs_fwd, increase_tick=False)
+        else:
+            env.forward(q=q_curr,joint_idxs=joint_idxs_fwd,increase_tick=False) # fk
         ik_err = np.linalg.norm(ik_err_stack) # IK error
         if ik_err < ik_err_th: break # terminate condition
         if verbose:
