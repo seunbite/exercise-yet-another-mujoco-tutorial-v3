@@ -11,6 +11,7 @@ import imageio
 from time import strftime
 import glob
 from tqdm import tqdm
+import time
 
 # Add paths to import custom modules
 sys.path.append('../package/helper/')
@@ -26,6 +27,76 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
+
+class TimeTracker:
+    def __init__(self):
+        self.times = {}
+        self.temp_start = None
+        
+    def start_timer(self, name):
+        self.temp_start = time.time()
+        
+    def end_timer(self, name):
+        if self.temp_start is not None:
+            duration = time.time() - self.temp_start
+            if name not in self.times:
+                self.times[name] = []
+            self.times[name].append(duration)
+            self.temp_start = None
+            return duration
+        return 0
+    
+    def get_stats(self):
+        stats = {}
+        for name, times_list in self.times.items():
+            if len(times_list) > 0:
+                stats[name] = {
+                    'mean': np.mean(times_list),
+                    'total': np.sum(times_list),
+                    'count': len(times_list),
+                    'max': np.max(times_list),
+                    'min': np.min(times_list)
+                }
+        return stats
+    
+    def print_stats(self):
+        stats = self.get_stats()
+        total_time = sum(data['total'] for data in stats.values())
+        
+        print("\n" + "="*90)
+        print("TIMING ANALYSIS")
+        print("="*90)
+        print(f"{'Component':<25} | {'Total (s)':<10} | {'%':<6} | {'Mean (ms)':<10} | {'Count':<8}")
+        print("-"*90)
+        
+        for name, data in sorted(stats.items(), key=lambda x: x[1]['total'], reverse=True):
+            percentage = (data['total'] / total_time) * 100 if total_time > 0 else 0
+            print(f"{name:<25} | {data['total']:>8.2f}s | {percentage:>5.1f}% | {data['mean']*1000:>8.1f}ms | {data['count']:>6}")
+        
+        print("="*90)
+        print(f"{'TOTAL TIME':<25} | {total_time:>8.2f}s | {'100.0%':>6} |")
+        print("="*90)
+        
+        # Special analysis for potential rendering issues
+        if 'render' in stats and 'env_step' in stats:
+            render_ratio = stats['render']['total'] / stats['env_step']['total'] if stats['env_step']['total'] > 0 else 0
+            print(f"\nRENDER ANALYSIS:")
+            print(f"Render time as % of env_step time: {render_ratio*100:.1f}%")
+            
+        if 'env_step_physics' in stats and 'env_step' in stats:
+            physics_ratio = stats['env_step_physics']['total'] / stats['env_step']['total'] if stats['env_step']['total'] > 0 else 0
+            print(f"Physics time as % of env_step time: {physics_ratio*100:.1f}%")
+            
+        print("="*90)
+    
+    def reset(self):
+        self.times = {}
+        
+    def reset_counters(self):
+        """Reset counters but keep recent timing data for accurate averages"""
+        for name in self.times:
+            if len(self.times[name]) > 100:  # Keep last 100 measurements
+                self.times[name] = self.times[name][-100:]
 
 
 class UR5eHeadTouchEnv:
@@ -240,7 +311,7 @@ class UR5eHeadTouchEnv:
 
     def get_observation(self):
         """
-        Get normalized observation
+        Get normalized observation - this might be expensive
         """
         # Get raw observation
         obs = self._get_observation_raw()
@@ -498,229 +569,40 @@ class UR5eHeadTouchEnv:
         return reward, reward_components
     
     def reward_2(self, applicator_tip_pos, current_distance_start, current_distance_end):
-        r_START_TOUCH = 0
-        r_END_TOUCH = 100
-        r_TIME = -0.0001
-        w_START_TOUCH = -2
-        w_DISTANCE_IMPROVEMENT = -1
-        w_LESS_MOVEMENT = -10  # Weight for joint movement penalty
+        w_START_TOUCH = -2  # penalty proportional to distance before start reached
 
-        reward = 0.0
-        r_start_distance = 0.0
-        r_in_progress = 0.0
-        r_less_movement = 0.0  # Penalty for joint movement
-        stop_rewarding = False
-
-        if not self.start_reached:
-            delta_d = current_distance_start
-            r_start_distance = delta_d * w_START_TOUCH
-            
-            if current_distance_start < self.touch_threshold:
-                print("Start point reached!")
-                self.start_reached = True
-                reward += r_START_TOUCH
-                stop_rewarding = True
-            
-        if self.start_reached and not self.end_reached and not stop_rewarding:
-            r_in_progress = current_distance_end * w_DISTANCE_IMPROVEMENT
-            
-            if current_distance_end < self.touch_threshold:
-                self.end_reached = True
-                reward += r_END_TOUCH
-                print("End point reached!")
-        
-        # Calculate less movement penalty (square sum of joint movement)
-        try:
-            joint_idxs = self.env.get_idxs_fwd(joint_names=self.joint_names)
-            current_qpos = self.env.data.qpos[joint_idxs]
-            
-            if hasattr(self, 'prev_qpos') and self.prev_qpos is not None:
-                joint_movement = current_qpos - self.prev_qpos
-                r_less_movement = np.sum(joint_movement ** 2) * w_LESS_MOVEMENT
-            
-            # Update previous joint positions
-            self.prev_qpos = current_qpos.copy()
-            
-        except Exception as e:
-            # Fallback if joint access fails
-            r_less_movement = 0.0
-            if not hasattr(self, 'prev_qpos'):
-                self.prev_qpos = None
-        
-        reward += r_start_distance + r_in_progress + r_TIME + r_less_movement
-
-        reward_components = {
-            'r_time': r_TIME,
-            'r_start_distance': r_start_distance,
-            'r_in_progress': r_in_progress,
-            'r_less_movement': r_less_movement,
-        }
-        
-        return reward, reward_components
-    
-    def reward_3(self, applicator_tip_pos, current_distance_start, current_distance_end):
-        r_START_TOUCH = 0
-        r_END_TOUCH = 100
-        r_TIME = -0.0001
-        w_START_TOUCH = -2
-        w_DISTANCE_IMPROVEMENT = -0.05
-        w_LINE_DEVIATION = -0.0001  # Weight for line deviation penalty
-
-        reward = 0.0
-        r_start_distance = 0.0
-        r_in_progress = 0.0
-        r_line_deviation = 0.0  # Penalty for line deviation
-        stop_rewarding = False
-
-        if not self.start_reached:
-            delta_d = current_distance_start
-            r_start_distance = delta_d * w_START_TOUCH
-            
-            if current_distance_start < self.touch_threshold:
-                print("Start point reached!")
-                self.start_reached = True
-                reward += r_START_TOUCH
-                stop_rewarding = True
-            
-        if self.start_reached and not self.end_reached and not stop_rewarding:
-            r_in_progress = current_distance_end * w_DISTANCE_IMPROVEMENT
-            
-            # Calculate line deviation penalty
-            r_line_deviation = self._get_distance_from_line() * w_LINE_DEVIATION
-            
-            if current_distance_end < self.touch_threshold:
-                self.end_reached = True
-                reward += r_END_TOUCH
-                print("End point reached!")
-        
-        reward += r_start_distance + r_in_progress + r_TIME + r_line_deviation
-
-        reward_components = {
-            'r_time': r_TIME,
-            'r_start_distance': r_start_distance,
-            'r_in_progress': r_in_progress,
-            'r_line_deviation': r_line_deviation,
-        }
-        
-        return reward, reward_components
-    
-    def reward_4(self, applicator_tip_pos, current_distance_start, current_distance_end):
-        r_START_TOUCH = 0
-        r_END_TOUCH = 100
-        r_TIME = -0.0001
-        c_START_TOUCH = 0.0
-        w_START_TOUCH = -2
-        w_DISTANCE_IMPROVEMENT = -0.05
-        w_BINARY_LINE_DEVIATION = 1.0  # Weight for binary line deviation reward
-        line_success_threshold = 0.02  # Threshold for being "on the line" (2cm)
-
-        reward = 0.0
-        r_start_distance = 0.0
-        r_in_progress = 0.0
-        r_binary_line_deviation = 0.0  # Binary reward for being on line
-        stop_rewarding = False
-
-        if not self.start_reached:
-            delta_d = current_distance_start
-            r_start_distance = delta_d * w_START_TOUCH + c_START_TOUCH
-            
-            if current_distance_start < self.touch_threshold:
-                print("Start point reached!")
-                self.start_reached = True
-                reward += r_START_TOUCH
-                stop_rewarding = True
-            
-        if self.start_reached and not self.end_reached and not stop_rewarding:
-            r_in_progress = current_distance_end * w_DISTANCE_IMPROVEMENT
-            
-            # Calculate binary line deviation reward (1 if on line, 0 if not)
-            line_deviation = self._get_distance_from_line()
-            if line_deviation <= line_success_threshold:
-                r_binary_line_deviation = w_BINARY_LINE_DEVIATION  # Reward for being on the line
-            else:
-                r_binary_line_deviation = 0.0  # No reward for being off the line
-            
-            if current_distance_end < self.touch_threshold:
-                self.end_reached = True
-                reward += r_END_TOUCH
-                print("End point reached!")
-        
-        reward += r_start_distance + r_in_progress + r_TIME + r_binary_line_deviation
-
-        reward_components = {
-            'r_time': r_TIME,
-            'r_start_distance': r_start_distance,
-            'r_in_progress': r_in_progress,
-            'r_binary_line_deviation': r_binary_line_deviation,
-        }
-        
-        return reward, reward_components
-    
-    def reward_5(self, applicator_tip_pos, current_distance_start, current_distance_end):
-        r_START_TOUCH = 0
-        r_END_TOUCH = 100
-        r_TIME = -0.0001
-        c_START_TOUCH = 0.0
-        w_START_TOUCH = -2
-        w_DISTANCE_PROGRESS = 1.0  # Weight for distance progress reward
-        w_BINARY_LINE_DEVIATION = 1.0  # Weight for binary line deviation reward
-        line_success_threshold = 0.02  # Threshold for being "on the line" (2cm)
+        r_END_TOUCH = 10    # bonus when end point touched
+        r_TIME = -0.001     # tiny time penalty
+        w_DISTANCE_PROGRESS = 0.1  # positive reward as tip approaches end
 
         reward = 0.0
         r_start_distance = 0.0
         r_distance_progress = 0.0
-        r_binary_line_deviation = 0.0
         stop_rewarding = False
 
         if not self.start_reached:
             delta_d = current_distance_start
-            r_start_distance = delta_d * w_START_TOUCH + c_START_TOUCH
+            r_start_distance = delta_d * w_START_TOUCH
             
             if current_distance_start < self.touch_threshold:
                 print("Start point reached!")
                 self.start_reached = True
-                reward += r_START_TOUCH
                 stop_rewarding = True
             
         if self.start_reached and not self.end_reached and not stop_rewarding:
-            start_point = self.target_line[0]
-            end_point = self.target_line[1]
-            line_vector = end_point - start_point
-            line_length = np.linalg.norm(line_vector)
-            
-            if line_length > 1e-6:
-                tip_vector = applicator_tip_pos - start_point
-                projection_scalar = np.dot(tip_vector, line_vector) / (line_length ** 2)
-                
-                if projection_scalar < 0 or projection_scalar > 1:
-                    r_distance_progress = -0.05
-                    r_binary_line_deviation = 0.0
-                else:
-                    distance_to_end = np.linalg.norm(applicator_tip_pos - end_point)
-                    normalized_distance = distance_to_end / line_length
-                    r_distance_progress = w_DISTANCE_PROGRESS * np.maximum((1 - normalized_distance), 0.0)
-                    
-                    line_deviation = self._get_distance_from_line()
-                    if line_deviation <= line_success_threshold:
-                        r_binary_line_deviation = w_BINARY_LINE_DEVIATION
-                    else:
-                        r_binary_line_deviation = 0.0
-            else:
-                r_distance_progress = 0.0
-                r_binary_line_deviation = 0.0
+            r_distance_progress = (1 - (current_distance_end / max(self.target_line_length, 1e-6))) * w_DISTANCE_PROGRESS
             
             if current_distance_end < self.touch_threshold:
                 self.end_reached = True
                 reward += r_END_TOUCH
                 print("End point reached!")
         
-        reward += r_start_distance + r_distance_progress + r_TIME + r_binary_line_deviation
+        reward += r_start_distance + r_distance_progress + r_TIME
 
         reward_components = {
             'r_time': r_TIME,
             'r_start_distance': r_start_distance,
-            'r_distance_progress': r_distance_progress,
-            'r_binary_line_deviation': r_binary_line_deviation,
+            'r_progress': r_distance_progress,
         }
         
         return reward, reward_components
@@ -793,16 +675,21 @@ class UR5eHeadTouchEnv:
 
     def step(self, action, max_time=np.inf):
         self.tick += 1
+        
+        # Action normalization
         scaled_action = self._normalize_action(action)
         
+        # Physics simulation step - this is where most time should be spent
         try:
             ctrl_idxs = self.env.get_idxs_step(joint_names=self.joint_names)
             self.env.step(ctrl=scaled_action, ctrl_idxs=ctrl_idxs, nstep=self.mujoco_nstep)
         except:
             self.env.step(ctrl=scaled_action, nstep=self.mujoco_nstep)
         
+        # Reward computation
         reward, reward_components, state_info = self.compute_reward(action, max_time)
         
+        # Observation processing - might be expensive
         self.accumulate_state_history()
         obs_next = self.get_observation()
         
@@ -1082,18 +969,18 @@ def train_ur5e_sac(
     xml_path='../asset/makeup_frida/scene_table.xml',
     what_changed='',
     test_only=False,
-    start_reached=False,
+    start_reached=True,
     n_test_episodes=3,
-    dynamic_target=0, # 0 means do dynamic target, 100 means do static target
+    dynamic_target=10, # 0 means do dynamic target, 100 means do static target
     result_path=None,
-    do_render=True,
+    do_render=False,
     do_log=True,
-    reward_mode='4',
-    n_episode=1500,
+    reward_mode='2',
+    n_episode=500,
     max_epi_sec=5.0,
     n_warmup_epi=10,
     buffer_limit=50000,
-    init_alpha=0.2,  # <-- Increase init_alpha to encourage more exploration (default was 0.1)
+    init_alpha=0.1,  # <-- Increase init_alpha to encourage more exploration (default was 0.1)
     max_torque=1.0,
     lr_actor=0.0005,
     lr_alpha=0.0001,
@@ -1102,9 +989,9 @@ def train_ur5e_sac(
     batch_size=256,
     gamma=0.99,
     tau=0.005,
-    print_every=1,
-    save_every_episode=50,
-    plot_heatmap_every_episode=10,
+    print_every=10,
+    save_every_episode=100,
+    plot_heatmap_every_episode=100,
     seed=0,
     train_from_checkpoint=None,
     ):
@@ -1196,17 +1083,22 @@ def train_ur5e_sac(
         return best_model_path
 
 
-    print("Initializing UR5e environment...")
-    print(f"XML path: {xml_path}")
-    print(f"Rendering enabled: {do_render}")
     buffer_warmup=buffer_limit // 5
 
+    # Initialize timer early to track initialization time
+    init_timer = TimeTracker()
+    
+    init_timer.start_timer('env_initialization')
     env = MuJoCoParserClass(name=f'UR5e_{what_changed}_{now_time}', rel_xml_path=xml_path, verbose=True)
     gym = UR5eHeadTouchEnv(env=env, HZ=50, reward_mode=reward_mode, start_reached=start_reached, dynamic_target=dynamic_target)
     max_epi_tick=int(max_epi_sec * gym.HZ)
+    init_timer.end_timer('env_initialization')
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    init_timer.start_timer('buffer_initialization')
     replay_buffer = ReplayBufferClass(buffer_limit, device=device)
+    init_timer.end_timer('buffer_initialization')
     
     actor_arg = {
         'obs_dim': gym.o_dim, 'h_dims': [256, 256], 'out_dim': gym.a_dim,
@@ -1218,11 +1110,13 @@ def train_ur5e_sac(
         'lr_critic': lr_critic, 'device': device
     }
     
+    init_timer.start_timer('network_initialization')
     actor = ActorClass(**actor_arg).to(device)
     critic_one = CriticClass(**critic_arg).to(device)
     critic_two = CriticClass(**critic_arg).to(device)
     critic_one_trgt = CriticClass(**critic_arg).to(device)
     critic_two_trgt = CriticClass(**critic_arg).to(device)
+    init_timer.end_timer('network_initialization')
 
     # Load checkpoint if specified
     start_episode = 0  # Always start counting episodes from 0 even when loading a checkpoint
@@ -1230,6 +1124,7 @@ def train_ur5e_sac(
         if os.path.exists(train_from_checkpoint):
             print(f"Loading checkpoint from: {train_from_checkpoint}")
             try:
+                init_timer.start_timer('checkpoint_loading')
                 checkpoint = torch.load(train_from_checkpoint, map_location=device)
                 
                 # Load actor state
@@ -1278,6 +1173,8 @@ def train_ur5e_sac(
                 print(f"Error loading checkpoint: {e}")
                 print("Starting training from scratch...")
                 start_episode = 0
+            finally:
+                init_timer.end_timer('checkpoint_loading')
         else:
             print(f"Checkpoint file not found: {train_from_checkpoint}")
             print("Starting training from scratch...")
@@ -1339,19 +1236,73 @@ def train_ur5e_sac(
     print(f"Max episode time: {max_epi_sec}s")
     print(f"Buffer size: {buffer_limit}, Warmup: {buffer_warmup}")
     
+    # Only initialize viewer if actually rendering
     if do_render:
-        try:
-            print("Initializing viewer...")
-            gym.init_viewer()
-            print("Viewer initialized successfully.")
-        except Exception as e:
-            print(f"Error initializing viewer: {e}")
-            print("Continuing without rendering...")
-            do_render = False
+        init_timer.start_timer('viewer_initialization')
+        gym.init_viewer()
+        init_timer.end_timer('viewer_initialization')
+    else:
+        # Ensure viewer is explicitly disabled for training
+        gym.env.use_mujoco_viewer = False
     
     np.random.seed(seed)
     torch.manual_seed(seed)
     random.seed(seed)
+    
+    # Initialize timing tracker and merge initialization timings
+    timer = TimeTracker()
+    # Merge initialization timings with main timer
+    timer.times = init_timer.times
+    
+    # Print initialization timing report
+    print("\nInitialization timing:")
+    init_timer.print_stats()
+    
+    # Check if viewer is being initialized even when do_render=False
+    if hasattr(gym.env, 'viewer') and gym.env.viewer is not None:
+        print(f"WARNING: Viewer is initialized even though do_render={do_render}")
+    
+    # Check if we're using MuJoCo viewer
+    print(f"Environment viewer status: use_mujoco_viewer={getattr(gym.env, 'use_mujoco_viewer', 'unknown')}")
+    
+    # Check if there are visual geoms that might slow down computation
+    if hasattr(gym.env, 'model') and hasattr(gym.env.model, 'ngeom'):
+        print(f"Number of visual geometries: {gym.env.model.ngeom}")
+    
+    # Quick benchmark test to measure rendering impact
+    print("\nRunning quick benchmark to test rendering impact...")
+    
+    # Test without rendering
+    benchmark_timer = TimeTracker()
+    test_obs = gym.reset()
+    
+    for i in range(10):
+        test_action = gym.sample_action()
+        benchmark_timer.start_timer('step_without_render')
+        test_obs, _, _, _ = gym.step(test_action)
+        benchmark_timer.end_timer('step_without_render')
+    
+    # Test with rendering if enabled
+    if do_render:
+        for i in range(10):
+            test_action = gym.sample_action()
+            benchmark_timer.start_timer('step_with_render')
+            test_obs, _, _, _ = gym.step(test_action)
+            if gym.is_viewer_alive():
+                gym.render()
+            benchmark_timer.end_timer('step_with_render')
+    
+    benchmark_stats = benchmark_timer.get_stats()
+    print("\nBenchmark Results:")
+    if 'step_without_render' in benchmark_stats:
+        print(f"Step without render: {benchmark_stats['step_without_render']['mean']*1000:.1f}ms avg")
+    if 'step_with_render' in benchmark_stats:
+        print(f"Step with render: {benchmark_stats['step_with_render']['mean']*1000:.1f}ms avg")
+        ratio = benchmark_stats['step_with_render']['mean'] / benchmark_stats['step_without_render']['mean'] if 'step_without_render' in benchmark_stats else 0
+        print(f"Rendering overhead: {ratio:.1f}x slower")
+    
+    # Reset environment after benchmark
+    gym.reset()
     
     # Adjust episode range if resuming from checkpoint
     
@@ -1360,7 +1311,9 @@ def train_ur5e_sac(
         progress = (epi_idx - start_episode) / n_episode
         one_to_zero = 1 - progress
         
+        timer.start_timer('env_reset')
         s = gym.reset()
+        timer.end_timer('env_reset')
         
         USE_RANDOM_POLICY = (np.random.rand() < (0.1 * one_to_zero)) or (epi_idx < n_warmup_epi)
         
@@ -1370,15 +1323,32 @@ def train_ur5e_sac(
         for tick in range(max_epi_tick):
             # Select action
             if USE_RANDOM_POLICY:
+                timer.start_timer('action_random')
                 a_np = gym.sample_action()
+                timer.end_timer('action_random')
             else:
+                timer.start_timer('action_neural')
                 a, log_prob = actor(np2torch(s, device=device))
                 a_np = torch2np(a)
+                timer.end_timer('action_neural')
             
             # Step environment
+            timer.start_timer('env_step')
+            
+            # Break down env_step into components
+            timer.start_timer('env_step_physics')
             s_prime, reward, done, info = gym.step(a_np, max_time=max_epi_sec)
+            timer.end_timer('env_step_physics')
+            
+            timer.start_timer('env_step_heatmap')
             gym.heatmap_dots.append((gym.get_applicator_tip_pos(), gym.target_line[0], gym.target_line[1], gym.start_reached, reward))
+            timer.end_timer('env_step_heatmap')
+            
+            timer.end_timer('env_step')
+            
+            timer.start_timer('replay_buffer_put')
             replay_buffer.put((s, a_np, reward, s_prime, done))
+            timer.end_timer('replay_buffer_put')
             
             reward_total += reward
             if info['success']:
@@ -1390,122 +1360,92 @@ def train_ur5e_sac(
                 break
 
             if do_render and ((tick % 1) == 0):
-                if gym.is_viewer_alive():
+                timer.start_timer('render')
+                if gym.is_viewer_alive() and gym.env.use_mujoco_viewer:
                     gym.render()
                 else:
                     break  # Exit if viewer is closed
+                timer.end_timer('render')
             
-            if do_log:
-                wandb.log({
-                    "step": tick,
-                    "reward": reward,
-                    "success": info['success'],
-                    "epi_len": tick,
-                    "buffer_size": replay_buffer.size(),
-                    "alpha": actor.log_alpha.exp(),
-                    "episode": epi_idx,
-                    "episode_reward": reward_total,
-                    "replay_buffer_size": replay_buffer.size(),
-                    **{k: v for k, v in info.items() if 'r_' in k}
-                })
-
             if replay_buffer.size() > buffer_warmup:
+                timer.start_timer('neural_training')
                 for _ in range(n_update_per_tick):
+                    timer.start_timer('replay_buffer_sample')
                     mini_batch = replay_buffer.sample(batch_size)
+                    timer.end_timer('replay_buffer_sample')
         
+                    timer.start_timer('td_target_computation')
                     td_target = get_target(
                         actor, critic_one_trgt, critic_two_trgt,
                         gamma=gamma, mini_batch=mini_batch, device=device
                     )
+                    timer.end_timer('td_target_computation')
+                    
+                    timer.start_timer('critic_training')
                     critic_one.train(td_target, mini_batch)
                     critic_two.train(td_target, mini_batch)
+                    timer.end_timer('critic_training')
                     
-                    critic_one_grad_norm = gym.compute_gradient_norm(critic_one)
-                    critic_two_grad_norm = gym.compute_gradient_norm(critic_two)
-                    
+                    timer.start_timer('actor_training')
                     actor.train(
                         critic_one, critic_two,
                         target_entropy=-gym.a_dim,
                         mini_batch=mini_batch
                     )
+                    timer.end_timer('actor_training')
                     
-                    actor_grad_norm = gym.compute_gradient_norm(actor)
-                    
-                    if do_log:
-                        wandb.log({
-                            "actor_grad_norm": actor_grad_norm,
-                            "critic_one_grad_norm": critic_one_grad_norm,
-                            "critic_two_grad_norm": critic_two_grad_norm,
-                        })
-                    
+                    timer.start_timer('soft_update')
                     critic_one.soft_update(tau=tau, net_target=critic_one_trgt)
                     critic_two.soft_update(tau=tau, net_target=critic_two_trgt)
+                    timer.end_timer('soft_update')
+                timer.end_timer('neural_training')
         
         
         if do_log:
-            # Calculate mean success rates
-            mean_success_episode_start = gym.total_start_reached / max(gym.total_episodes, 1)
-            mean_success_episode_end = gym.total_end_reached / max(gym.total_episodes, 1)
-            
+            timer.start_timer('wandb_logging')
             wandb.log({
                 'episode_reward': reward_total,
-                'mean_success_episode_start': mean_success_episode_start,
-                'mean_success_episode_end': mean_success_episode_end,
-                'total_episodes': gym.total_episodes,
-                'total_start_reached': gym.total_start_reached,
-                'total_end_reached': gym.total_end_reached
+                'success_rate': success_count / max_epi_tick,
             })
+            timer.end_timer('wandb_logging')
 
         if (epi_idx % print_every) == 0:
             start_distance = info['distance_start']
             end_distance = info['distance_end']
             final_reward = reward
             print(f"[{epi_idx}/{n_episode}] final_reward: [{final_reward:.3f}] start: [{info['start_reached']}] end: [{info['end_reached']}] sum_reward:[{reward_total:.2f}] start_distance:[{start_distance:.3f}] end_distance:[{end_distance:.3f}] epi_len:[{tick}/{max_epi_tick}] buffer_size:[{replay_buffer.size()}] alpha:[{actor.log_alpha.exp():.2f}]")
+            
+            # Print timing statistics every 1000 episodes
+            if epi_idx > 0:
+                timer.print_stats()
+                # Reset counters to avoid memory buildup
+                timer.reset_counters()
         
-        if (epi_idx % plot_heatmap_every_episode) == 0:
+        if (epi_idx % plot_heatmap_every_episode) == 0 and epi_idx > 0:
+            timer.start_timer('heatmap_save')
             heatmap_path = os.path.join(heatmap_dir, f'{epi_idx}.png')
             gym.save_heatmaps(filepath=heatmap_path)
+            timer.end_timer('heatmap_save')
             
         if (epi_idx % save_every_episode) == 0 and epi_idx > 0:
+            timer.start_timer('model_save')
             pth_path = f'./result/weights/{now_date}_sac_{gym.name.lower()}/episode_{epi_idx}.pth'
             dir_path = os.path.dirname(pth_path)
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
-            
-            # Save simple checkpoint (backward compatibility)
             torch.save(actor.state_dict(), pth_path)
+            timer.end_timer('model_save')
+            print(f"  [Save] [{pth_path}] saved.")
             
-            # Save complete checkpoint for resuming training
-            checkpoint_path = f'./result/weights/{now_date}_sac_{gym.name.lower()}/episode_{epi_idx}.pth'
-            checkpoint = {
-                'episode': epi_idx,
-                'actor_state_dict': actor.state_dict(),
-                'critic_one_state_dict': critic_one.state_dict(),
-                'critic_two_state_dict': critic_two.state_dict(),
-                'critic_one_trgt_state_dict': critic_one_trgt.state_dict(),
-                'critic_two_trgt_state_dict': critic_two_trgt.state_dict(),
-                'actor_optimizer_state_dict': actor.optimizer.state_dict() if hasattr(actor, 'optimizer') else None,
-                'alpha_optimizer_state_dict': actor.alpha_optimizer.state_dict() if hasattr(actor, 'alpha_optimizer') else None,
-                'critic_one_optimizer_state_dict': critic_one.optimizer.state_dict() if hasattr(critic_one, 'optimizer') else None,
-                'critic_two_optimizer_state_dict': critic_two.optimizer.state_dict() if hasattr(critic_two, 'optimizer') else None,
-                'hyperparameters': {
-                    'lr_actor': lr_actor,
-                    'lr_alpha': lr_alpha,
-                    'lr_critic': lr_critic,
-                    'gamma': gamma,
-                    'tau': tau,
-                    'init_alpha': init_alpha,
-                    'max_torque': max_torque,
-                    'reward_mode': reward_mode,
-                }
-            }
-            torch.save(checkpoint, checkpoint_path)
-            print(f"  [Save] [{pth_path}] and [{checkpoint_path}] saved.")
-    
-    print("Training completed!")
     
     if do_render and gym.is_viewer_alive():
         gym.close_viewer()
+    
+    # Print final timing analysis
+    print("\n" + "="*80)
+    print("FINAL TIMING ANALYSIS")
+    print("="*80)
+    timer.print_stats()
 
 
 
@@ -1519,9 +1459,7 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
     # Initialize viewer for rendering
     if do_render or do_gif:
         try:
-            print("Initializing viewer for testing...")
             gym.init_viewer()
-            print("Viewer initialized successfully!")
         except Exception as e:
             print(f"Failed to initialize viewer: {e}")
             do_render = False
@@ -1533,11 +1471,8 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
     test_episode_lengths = []
     episode_frames = []
     
-    print(f"Starting {n_test_episodes} test episodes...")
     
     for test_episode in range(n_test_episodes):
-        print(f"\n=== Test Episode {test_episode + 1}/{n_test_episodes} ===")
-        
         s = gym.reset()
         
         episode_reward = 0.0
@@ -1570,36 +1505,7 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
                     print("Viewer closed, stopping rendering...")
                     do_render = False
                     break
-            
-            # Capture frames for GIF (simplified)
-            if do_gif and ((tick % 5) == 0):
-                try:
-                    if gym.is_viewer_alive():
-                        gym.render(PLOT_TARGET=True, PLOT_EE=True, PLOT_DISTANCE=True)
-                        time.sleep(0.01)
-                        
-                        # Try to capture frame from viewer
-                        if hasattr(gym.env, 'viewer') and gym.env.viewer:
-                            try:
-                                width, height = 480, 360
-                                pixels = gym.env.viewer.read_pixels(width, height, depth=False)
-                                
-                                if pixels is not None and pixels.size > 0:
-                                    pixels = np.flipud(pixels)
-                                    if pixels.dtype != np.uint8:
-                                        pixels = (pixels * 255).astype(np.uint8)
-                                    
-                                    if len(pixels.shape) == 3 and pixels.shape[2] == 3:
-                                        frames.append(pixels.copy())
-                            except Exception as e:
-                                if tick == 0:
-                                    print(f"GIF frame capture failed: {e}")
-                                    do_gif = False
-                except Exception as e:
-                    if tick == 0:
-                        print(f"GIF generation failed: {e}")
-                        do_gif = False
-            
+
             s = s_prime
             
             if done:
@@ -1612,12 +1518,6 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
         test_episode_lengths.append(tick + 1)
         if do_gif:
             episode_frames.append(frames)
-        
-        print(f"Episode {test_episode + 1} completed:")
-        print(f"  Reward: {episode_reward:.3f}")
-        print(f"  Success: {episode_success}")
-        print(f"  Final distance: {final_distance:.3f}")
-        print(f"  Episode length: {tick + 1}")
         
         if do_render:
             time.sleep(2.0)  # Pause between episodes
@@ -1664,19 +1564,7 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
         'distances': test_distances,
         'success_rates': test_success_rates,
         'episode_lengths': test_episode_lengths,
-        'summary': {
-            'mean_reward': np.mean(test_rewards),
-            'mean_distance': np.mean(test_distances),
-            'success_rate': np.mean(test_success_rates),
-            'best_distance': np.min(test_distances)
-        }
     }
-    
-    print(f"\n=== Test Results Summary ===")
-    print(f"Mean reward: {result['summary']['mean_reward']:.3f}")
-    print(f"Success rate: {result['summary']['success_rate']:.1%}")
-    print(f"Mean final distance: {result['summary']['mean_distance']:.3f}")
-    print(f"Best distance: {result['summary']['best_distance']:.3f}")
     
     if do_gif:
         result['best_episode_idx'] = best_episode_idx
