@@ -86,7 +86,7 @@ def convert_landmarks_to_world(landmarks, p_rate=0.056444 * 15, z_offset=0.7, ra
 # ----------------------------------------------------------------------
 
 def run(
-    keypoints_pkl: str = 'temp_mocap/keypoints_raw.pkl',
+    keypoints_pkl: str = 'temp_mocap/88848d2067d622de8e4f314e28dc431a.pkl',
     xml_path: str = '../asset/unitree_g1/scene_g1.xml',
     landmark_to_body: dict = None,
     joint_names_for_ik: list = None,

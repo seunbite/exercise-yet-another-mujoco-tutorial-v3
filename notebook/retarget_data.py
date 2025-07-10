@@ -767,7 +767,8 @@ def run(
     # ------------------------------------------------------------------
     # Save raw 3-D landmarks for later IK retargeting
     # ------------------------------------------------------------------
-    keypoints_pkl = os.path.join(output_dir, "keypoints_raw.pkl")
+    input_basename = os.path.basename(input_mp4).split('.')[0]
+    keypoints_pkl = os.path.join(output_dir, f"{input_basename}.pkl")
     try:
         with open(keypoints_pkl, "wb") as f:
             pickle.dump(poses3d, f)
@@ -775,7 +776,6 @@ def run(
     except Exception as e:
         print(f"[WARN] Could not save key-points pickle: {e}")
 
-    input_basename = os.path.basename(input_mp4).split('.')[0]
     if do_gif:
         pose_3d_gif = os.path.join(viz_dir, f"{input_basename}_3d_pose.gif")
         if save_gif(poses3d, frames, pose_3d_gif, fps=min(fps, 1)):
