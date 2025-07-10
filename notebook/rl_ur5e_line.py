@@ -968,15 +968,13 @@ class UR5eHeadTouchEnv:
 def train_ur5e_sac(
     xml_path='../asset/makeup_frida/scene_table.xml',
     what_changed='',
-    test_only=False,
     start_reached=True,
-    n_test_episodes=3,
-    dynamic_target=10, # 0 means do dynamic target, 100 means do static target
+    dynamic_target=0, # 0 means do dynamic target, 100 means do static target
     result_path=None,
     do_render=False,
     do_log=True,
     reward_mode='2',
-    n_episode=500,
+    n_episode=1500,
     max_epi_sec=5.0,
     n_warmup_epi=10,
     buffer_limit=50000,
@@ -989,9 +987,9 @@ def train_ur5e_sac(
     batch_size=256,
     gamma=0.99,
     tau=0.005,
-    print_every=10,
+    print_every=50,
     save_every_episode=100,
-    plot_heatmap_every_episode=100,
+    plot_heatmap_every_episode=1000,
     seed=0,
     train_from_checkpoint=None,
     ):
@@ -1004,88 +1002,7 @@ def train_ur5e_sac(
     heatmap_dir = f'./result/heatmap/{now_time}/'
     os.makedirs(heatmap_dir, exist_ok=True)
 
-    if test_only:
-        print("=== TESTING MODE ===")
-        os.makedirs(result_path.replace('weights', 'gifs'), exist_ok=True)
-        all_pth_files = glob.glob(os.path.join(result_path, '*.pth'))
-        all_pth_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-        print(f"Found {len(all_pth_files)} model files to test:")
-        for pth_file in all_pth_files:
-            print(f"   - {pth_file}")
-        
-        if len(all_pth_files) == 0:
-            print(f"No model files found in {result_path}")
-            print("Make sure you have trained models saved in the weights directory.")
-            return None
-        
-        print(f"Initializing environment for testing...")
-        env = MuJoCoParserClass(name=f'UR5e_Test', rel_xml_path=xml_path, verbose=False)
-        gym = UR5eHeadTouchEnv(env=env, HZ=50, reward_mode=reward_mode, start_reached=start_reached, dynamic_target=dynamic_target)
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        print(f"Using device: {device}")
-        
-        best_model_path = None
-        best_performance = float('-inf')
-        all_results = []
-        
-        print(f"\nTesting {len(all_pth_files)} models with rendering enabled...")
-        for i, pth_file in enumerate(all_pth_files):
-            print(f"\n--- Testing Model {i+1}/{len(all_pth_files)}: {os.path.basename(pth_file)} ---")
-            
-            try:
-                actor = ActorClass(
-                    obs_dim=gym.o_dim, h_dims=[256, 256], out_dim=gym.a_dim, 
-                    max_out=max_torque, init_alpha=init_alpha, lr_actor=lr_actor, 
-                    lr_alpha=lr_alpha, device=device
-                ).to(device)
-                
-                checkpoint = torch.load(pth_file, map_location=device)
-                actor.load_state_dict(checkpoint)
-                
-                gif_path = f'{result_path.replace("weights", "gifs")}/{os.path.basename(pth_file).replace(".pth", ".gif")}'
-                
-                # Enable rendering and GIF generation for testing
-                results = test_ur5e_sac(
-                    gym=gym, 
-                    actor=actor, 
-                    device=device, 
-                    max_epi_sec=max_epi_sec, 
-                    do_render=True,  # Always enable rendering in test mode
-                    do_gif=True,     # Always enable GIF generation
-                    n_test_episodes=n_test_episodes,
-                    gif_path=gif_path
-                )
-                
-                performance_score = results['summary']['success_rate'] * 100 - results['summary']['mean_distance'] * 10
-                
-                all_results.append({
-                    'path': pth_file,
-                    'performance': performance_score,
-                    'results': results
-                })
-                
-                print(f"Results: Score {performance_score:.2f} (Success: {results['summary']['success_rate']:.1%}, Dist: {results['summary']['mean_distance']:.3f})")
-                
-                if performance_score > best_performance:
-                    best_performance = performance_score
-                    best_model_path = pth_file
-                    
-            except Exception as e:
-                print(f"Error testing model {pth_file}: {e}")
-                continue
-        
-        if best_model_path:
-            print(f"\n🏆 BEST MODEL: {os.path.basename(best_model_path)}")
-            print(f"🏆 Performance Score: {best_performance:.2f}")
-        else:
-            print("No models were successfully tested.")
-            
-        return best_model_path
-
-
     buffer_warmup=buffer_limit // 5
-
-    # Initialize timer early to track initialization time
     init_timer = TimeTracker()
     
     init_timer.start_timer('env_initialization')
@@ -1236,75 +1153,25 @@ def train_ur5e_sac(
     print(f"Max episode time: {max_epi_sec}s")
     print(f"Buffer size: {buffer_limit}, Warmup: {buffer_warmup}")
     
-    # Only initialize viewer if actually rendering
     if do_render:
         init_timer.start_timer('viewer_initialization')
         gym.init_viewer()
         init_timer.end_timer('viewer_initialization')
     else:
-        # Ensure viewer is explicitly disabled for training
         gym.env.use_mujoco_viewer = False
     
     np.random.seed(seed)
     torch.manual_seed(seed)
     random.seed(seed)
     
-    # Initialize timing tracker and merge initialization timings
     timer = TimeTracker()
-    # Merge initialization timings with main timer
     timer.times = init_timer.times
     
-    # Print initialization timing report
     print("\nInitialization timing:")
     init_timer.print_stats()
     
-    # Check if viewer is being initialized even when do_render=False
-    if hasattr(gym.env, 'viewer') and gym.env.viewer is not None:
-        print(f"WARNING: Viewer is initialized even though do_render={do_render}")
-    
-    # Check if we're using MuJoCo viewer
-    print(f"Environment viewer status: use_mujoco_viewer={getattr(gym.env, 'use_mujoco_viewer', 'unknown')}")
-    
-    # Check if there are visual geoms that might slow down computation
-    if hasattr(gym.env, 'model') and hasattr(gym.env.model, 'ngeom'):
-        print(f"Number of visual geometries: {gym.env.model.ngeom}")
-    
-    # Quick benchmark test to measure rendering impact
-    print("\nRunning quick benchmark to test rendering impact...")
-    
-    # Test without rendering
-    benchmark_timer = TimeTracker()
-    test_obs = gym.reset()
-    
-    for i in range(10):
-        test_action = gym.sample_action()
-        benchmark_timer.start_timer('step_without_render')
-        test_obs, _, _, _ = gym.step(test_action)
-        benchmark_timer.end_timer('step_without_render')
-    
-    # Test with rendering if enabled
-    if do_render:
-        for i in range(10):
-            test_action = gym.sample_action()
-            benchmark_timer.start_timer('step_with_render')
-            test_obs, _, _, _ = gym.step(test_action)
-            if gym.is_viewer_alive():
-                gym.render()
-            benchmark_timer.end_timer('step_with_render')
-    
-    benchmark_stats = benchmark_timer.get_stats()
-    print("\nBenchmark Results:")
-    if 'step_without_render' in benchmark_stats:
-        print(f"Step without render: {benchmark_stats['step_without_render']['mean']*1000:.1f}ms avg")
-    if 'step_with_render' in benchmark_stats:
-        print(f"Step with render: {benchmark_stats['step_with_render']['mean']*1000:.1f}ms avg")
-        ratio = benchmark_stats['step_with_render']['mean'] / benchmark_stats['step_without_render']['mean'] if 'step_without_render' in benchmark_stats else 0
-        print(f"Rendering overhead: {ratio:.1f}x slower")
-    
-    # Reset environment after benchmark
     gym.reset()
     
-    # Adjust episode range if resuming from checkpoint
     
     for epi_idx in tqdm(range(start_episode, end_episode + 1)):
         # Calculate progression from 0 to 1 based on current training progress
@@ -1364,7 +1231,9 @@ def train_ur5e_sac(
                 if gym.is_viewer_alive() and gym.env.use_mujoco_viewer:
                     gym.render()
                 else:
-                    break  # Exit if viewer is closed
+                    # Don't break training! Just disable rendering if viewer fails
+                    print("Viewer not alive, disabling rendering for this episode...")
+                    do_render = False
                 timer.end_timer('render')
             
             if replay_buffer.size() > buffer_warmup:
@@ -1436,6 +1305,11 @@ def train_ur5e_sac(
             torch.save(actor.state_dict(), pth_path)
             timer.end_timer('model_save')
             print(f"  [Save] [{pth_path}] saved.")
+
+            # save
+            test_result = test_ur5e_sac(gym, actor, device, max_epi_sec=max_epi_sec, do_render=do_render)
+            print(f"Test result: {test_result}")
+            wandb.log({**test_result})
             
     
     if do_render and gym.is_viewer_alive():
@@ -1450,27 +1324,22 @@ def train_ur5e_sac(
 
 
     
-def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=False, n_test_episodes=3, gif_path='tmp.gif'):
+def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, n_test_episodes=3):
     """
     Test the trained UR5e SAC agent and save the best episode as GIF
     """
     max_epi_tick = int(max_epi_sec * 50)
     
-    # Initialize viewer for rendering
-    if do_render or do_gif:
+    if do_render:
         try:
             gym.init_viewer()
         except Exception as e:
             print(f"Failed to initialize viewer: {e}")
             do_render = False
-            do_gif = False
     
     test_rewards = []
     test_distances = []  
     test_success_rates = []
-    test_episode_lengths = []
-    episode_frames = []
-    
     
     for test_episode in range(n_test_episodes):
         s = gym.reset()
@@ -1479,7 +1348,6 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
         episode_success = False
         final_distance = 0.0
         best_distance = float('inf')
-        frames = []
         
         for tick in range(max_epi_tick):
             with torch.no_grad():
@@ -1496,11 +1364,10 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
             if info.get('success', False) or info.get('end_reached', False):
                 episode_success = True
             
-            # Render every few steps
             if do_render and ((tick % 2) == 0):
                 if gym.is_viewer_alive():
                     gym.render(PLOT_TARGET=True, PLOT_EE=True, PLOT_DISTANCE=True)
-                    time.sleep(0.02)  # Small delay for smooth visualization
+                    time.sleep(0.02)
                 else:
                     print("Viewer closed, stopping rendering...")
                     do_render = False
@@ -1515,60 +1382,18 @@ def test_ur5e_sac(gym, actor, device, max_epi_sec=10.0, do_render=True, do_gif=F
         test_rewards.append(episode_reward)
         test_distances.append(final_distance) 
         test_success_rates.append(1.0 if episode_success else 0.0)
-        test_episode_lengths.append(tick + 1)
-        if do_gif:
-            episode_frames.append(frames)
         
         if do_render:
-            time.sleep(2.0)  # Pause between episodes
+            time.sleep(2.0)
     
-    # Find best episode for GIF
-    best_episode_idx = 0
-    best_score = float('-inf')
+    if do_render:
+        gym.close_viewer()
     
-    for i in range(n_test_episodes):
-        success_bonus = test_success_rates[i] * 1000
-        reward_component = test_rewards[i]
-        distance_penalty = test_distances[i] * 10
-        
-        score = success_bonus + reward_component - distance_penalty
-        
-        if score > best_score:
-            best_score = score
-            best_episode_idx = i
-    
-    # Save GIF from best episode
-    if do_gif and episode_frames and len(episode_frames) > best_episode_idx:
-        best_frames = episode_frames[best_episode_idx]
-        print(f"\nSaving GIF with {len(best_frames)} frames from episode {best_episode_idx + 1}")
-        
-        if len(best_frames) > 0:
-            try:
-                imageio.mimsave(gif_path, best_frames, duration=0.1, loop=0)
-                print(f"GIF saved successfully: {gif_path}")
-            except Exception as e:
-                print(f"Error saving GIF: {e}")
-        else:
-            print("No frames captured for GIF")
-    
-    # Close viewer
-    if do_render or do_gif:
-        try:
-            gym.close_viewer()
-        except:
-            pass
-    
-    # Results summary
     result = {
-        'rewards': test_rewards,
-        'distances': test_distances,
-        'success_rates': test_success_rates,
-        'episode_lengths': test_episode_lengths,
+        'rewards': np.mean(test_rewards),
+        'distances': np.mean(test_distances),
+        'success_rates': np.mean(test_success_rates),
     }
-    
-    if do_gif:
-        result['best_episode_idx'] = best_episode_idx
-        result['gif_path'] = gif_path
     
     return result
 
