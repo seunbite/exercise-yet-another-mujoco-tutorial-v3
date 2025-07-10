@@ -100,8 +100,9 @@ def convert_landmarks_to_world(landmarks, p_rate=0.056444 * 15, z_offset=0.7, ra
 # Main retargeting routine
 # ----------------------------------------------------------------------
 
-def run(
+def ik_retargeting(
     keypoints_pkl: str = 'temp_mocap/88848d2067d622de8e4f314e28dc431a.pkl',
+    do_render: bool = True,
     xml_path: str = '../asset/unitree_g1/scene_g1.xml',
     landmark_to_body: dict = None,
     joint_names_for_ik: list = None,
@@ -141,10 +142,12 @@ def run(
     # Dynamic title based on root choice
     title = f"IK Retarget - {'Ankle Root 🦶' if use_ankle_root else 'Hip Root 🕺'}"
     env.init_viewer(title=title, transparent=False, backend='native')
+    if do_render:
+        env.init_viewer(title='IK Retarget', transparent=False, backend='native')
 
     frame_count = len(keypoints_3d)
     rep = tick = 0
-    while env.is_viewer_alive() and rep < repetition:
+    while (not do_render or env.is_viewer_alive()) and rep < repetition:
         landmarks = keypoints_3d[tick]
         tick += 1
         if tick >= frame_count:
@@ -152,14 +155,13 @@ def run(
             rep += 1
 
         if landmarks is None:
-            env.render(); time.sleep(playback_speed)
+            if do_render:
+                env.render()
+                time.sleep(playback_speed)
             continue
 
         pts_world = convert_landmarks_to_world(landmarks, p_rate=p_rate, z_offset=z_offset, radians=radians, use_ankle_root=use_ankle_root)
 
-        # Clear previous markers
-        env.remove_all_geoms()
-        env.plot_T()
 
         # 🎯 Visualize root reference point
         if use_ankle_root:
@@ -184,7 +186,6 @@ def run(
         # --------------- Solve IK for each mapping ----------------
         for lm_idx, body_name in landmark_to_body.items():
             p_trgt = pts_world[lm_idx]
-            env.plot_sphere(p=p_trgt, r=0.02, rgba=[0, 1, 0, 0.6])  # visualise target
 
             # IK towards this single body
             try:
@@ -205,12 +206,19 @@ def run(
             except Exception as e:
                 print(f'[IK] Warning: IK failed for {body_name}: {e}')
 
-        env.render(); time.sleep(playback_speed)
+        if do_render:
+            env.render()
+            env.plot_sphere(p=p_trgt, r=0.02, rgba=[0, 1, 0, 0.6])  # visualise target
+            time.sleep(playback_speed)
+            env.remove_all_geoms()
+            env.plot_T()
 
-    env.close_viewer()
-    print('Viewer closed.')
+
+    if do_render:
+        env.close_viewer()
+        print('Viewer closed.')
 
 
 if __name__ == '__main__':
     import fire
-    fire.Fire(run) 
+    fire.Fire(ik_retargeting)

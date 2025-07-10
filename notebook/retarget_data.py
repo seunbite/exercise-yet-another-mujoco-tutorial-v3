@@ -755,6 +755,7 @@ def run(
     viz_dir = os.path.join(output_dir, "visualization")
     os.makedirs(bvh_dir, exist_ok=True)
     os.makedirs(viz_dir, exist_ok=True)
+    
 
     frames = load_video_to_frames(input_mp4, fps=fps)
     if not frames:

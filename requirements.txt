@@ -107,7 +107,7 @@ pillow==11.2.1
 pooch==1.8.2
 prometheus-fastapi-instrumentator==7.1.0
 propcache==0.3.2
-protobuf==5.29.5
+# protobuf==5.29.5
 py-cpuinfo==9.0.0
 pycountry==24.6.1
 pydantic==2.11.5
