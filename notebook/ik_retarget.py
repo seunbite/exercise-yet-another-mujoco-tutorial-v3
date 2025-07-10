@@ -57,17 +57,31 @@ JOINT_NAMES_FOR_IK = [
 ]
 
 
-def convert_landmarks_to_world(landmarks, p_rate=0.056444 * 15, z_offset=0.7, radians=(90, 180, -90)):
-    """Same transformation used during mocap visualisation to obtain world-space
-    coordinates from MediaPipe landmarks (0-1 range) so the IK target matches
-    BVH/MuJoCo scale.
+def convert_landmarks_to_world(landmarks, p_rate=0.056444 * 15, z_offset=0.7, radians=(90, 180, -90), use_ankle_root=True):
+    """Transform MediaPipe landmarks to world-space coordinates.
+    
+    Args:
+        landmarks: MediaPipe landmarks array
+        p_rate: Scale factor
+        z_offset: Vertical offset
+        radians: Rotation angles
+        use_ankle_root: If True, uses ankle center as root (🦶). If False, uses hip center.
+    
     Returns an (N,3) np.array of world-space points.
     """
-    left_hip, right_hip = landmarks[23], landmarks[24]
-    hip_center = (left_hip + right_hip) / 2.0
+    if use_ankle_root:
+        # 🦶 NEW: Use ankle center as root (better for walking/dancing)
+        left_anchor, right_anchor = landmarks[27], landmarks[28]  # Ankle indices
+        root_center = (left_anchor + right_anchor) / 2.0
+        print(f"🦶 Ankle root center: {root_center}")
+    else:
+        # 🕺 ORIGINAL: Use hip center as root (better for upper body movement)
+        left_anchor, right_anchor = landmarks[23], landmarks[24]  # Hip indices
+        root_center = (left_anchor + right_anchor) / 2.0
+        print(f"🕺 Hip root center: {root_center}")
 
     # Root transform
-    p_root = hip_center * p_rate
+    p_root = root_center * p_rate
     R_root = np.eye(3)
     T_root = pr2t(p_root, R_root)
     T_root_rot = pr2t(np.zeros(3), rpy2r(np.radians(radians))) @ T_root
@@ -75,7 +89,8 @@ def convert_landmarks_to_world(landmarks, p_rate=0.056444 * 15, z_offset=0.7, ra
 
     pts_global = []
     for lm in landmarks:
-        p_local = (lm - hip_center) * p_rate
+        # Transform all landmarks relative to root center
+        p_local = (lm - root_center) * p_rate
         p_glob = R_root_rot @ p_local + p_root_rot + np.array([0.0, 0.0, z_offset])
         pts_global.append(p_glob)
     return np.asarray(pts_global)
@@ -97,6 +112,7 @@ def run(
     ik_err_th: float = 1e-3,
     playback_speed: float = 0.005,
     repetition: int = 5,
+    use_ankle_root: bool = True,  # 🆕 NEW: Choose root reference point
 ):
     """Perform IK so the robot mimics the motion captured in `keypoints_pkl`.
 
@@ -121,7 +137,10 @@ def run(
     # ---------------- MuJoCo environment ----------------
     env = MuJoCoParserClass(name='IKRetarget', rel_xml_path=xml_path, verbose=False)
     env.reset(step=True)
-    env.init_viewer(title='IK Retarget', transparent=False, backend='native')
+    
+    # Dynamic title based on root choice
+    title = f"IK Retarget - {'Ankle Root 🦶' if use_ankle_root else 'Hip Root 🕺'}"
+    env.init_viewer(title=title, transparent=False, backend='native')
 
     frame_count = len(keypoints_3d)
     rep = tick = 0
@@ -136,11 +155,31 @@ def run(
             env.render(); time.sleep(playback_speed)
             continue
 
-        pts_world = convert_landmarks_to_world(landmarks, p_rate=p_rate, z_offset=z_offset, radians=radians)
+        pts_world = convert_landmarks_to_world(landmarks, p_rate=p_rate, z_offset=z_offset, radians=radians, use_ankle_root=use_ankle_root)
 
         # Clear previous markers
         env.remove_all_geoms()
         env.plot_T()
+
+        # 🎯 Visualize root reference point
+        if use_ankle_root:
+            # 🦶 Ankle root: Show ankle center and individual ankles
+            left_ankle, right_ankle = landmarks[27], landmarks[28]
+            ankle_center_world = (pts_world[27] + pts_world[28]) / 2.0
+            env.plot_sphere(p=ankle_center_world, r=0.08, rgba=[1, 0, 0, 0.8])  # Large red sphere for ankle center
+            
+            # Show individual ankles
+            env.plot_sphere(p=pts_world[27], r=0.04, rgba=[0, 0, 1, 0.8])  # Blue for left ankle
+            env.plot_sphere(p=pts_world[28], r=0.04, rgba=[0, 1, 1, 0.8])  # Cyan for right ankle
+        else:
+            # 🕺 Hip root: Show hip center and individual hips
+            left_hip, right_hip = landmarks[23], landmarks[24]
+            hip_center_world = (pts_world[23] + pts_world[24]) / 2.0
+            env.plot_sphere(p=hip_center_world, r=0.08, rgba=[1, 0, 0, 0.8])  # Large red sphere for hip center
+            
+            # Show individual hips
+            env.plot_sphere(p=pts_world[23], r=0.04, rgba=[0, 0, 1, 0.8])  # Blue for left hip
+            env.plot_sphere(p=pts_world[24], r=0.04, rgba=[0, 1, 1, 0.8])  # Cyan for right hip
 
         # --------------- Solve IK for each mapping ----------------
         for lm_idx, body_name in landmark_to_body.items():
