@@ -73,12 +73,10 @@ def convert_landmarks_to_world(landmarks, p_rate=0.056444 * 15, z_offset=0.7, ra
         # 🦶 NEW: Use ankle center as root (better for walking/dancing)
         left_anchor, right_anchor = landmarks[27], landmarks[28]  # Ankle indices
         root_center = (left_anchor + right_anchor) / 2.0
-        print(f"🦶 Ankle root center: {root_center}")
     else:
         # 🕺 ORIGINAL: Use hip center as root (better for upper body movement)
         left_anchor, right_anchor = landmarks[23], landmarks[24]  # Hip indices
         root_center = (left_anchor + right_anchor) / 2.0
-        print(f"🕺 Hip root center: {root_center}")
 
     # Root transform
     p_root = root_center * p_rate
@@ -139,9 +137,6 @@ def ik_retargeting(
     env = MuJoCoParserClass(name='IKRetarget', rel_xml_path=xml_path, verbose=False)
     env.reset(step=True)
     
-    # Dynamic title based on root choice
-    title = f"IK Retarget - {'Ankle Root 🦶' if use_ankle_root else 'Hip Root 🕺'}"
-    env.init_viewer(title=title, transparent=False, backend='native')
     if do_render:
         env.init_viewer(title='IK Retarget', transparent=False, backend='native')
 

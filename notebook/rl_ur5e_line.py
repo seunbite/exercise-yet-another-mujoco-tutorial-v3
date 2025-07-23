@@ -797,9 +797,9 @@ class UR5eHeadTouchEnv:
             start_pos = self.target_line[0]
             end_pos = self.target_line[1]
             
-            self.env.plot_sphere(p=start_pos, r=0.008, rgba=[0, 1, 0, 0.8], label='Start')
+            # self.env.plot_sphere(p=start_pos, r=0.008, rgba=[0, 1, 0, 0.8], label='Start')
             self.env.plot_sphere(p=end_pos, r=0.008, rgba=[0, 0, 1, 0.8], label='End')
-            self.env.plot_line_fr2to(p_fr=start_pos, p_to=end_pos, rgba=[0.5, 0.5, 0.5, 0.6])
+            # self.env.plot_line_fr2to(p_fr=start_pos, p_to=end_pos, rgba=[0.5, 0.5, 0.5, 0.6])
         
         if PLOT_EE:
             tip_pos = self.get_applicator_tip_pos()
@@ -1307,7 +1307,7 @@ def train_ur5e_sac(
             print(f"  [Save] [{pth_path}] saved.")
 
             # save
-            test_result = test_ur5e_sac(gym, actor, device, max_epi_sec=max_epi_sec, do_render=do_render)
+            test_result = test_ur5e_sac(gym, actor, device, max_epi_sec=max_epi_sec, do_render=do_render, n_test_episodes=15)
             print(f"Test result: {test_result}")
             wandb.log({**test_result})
             

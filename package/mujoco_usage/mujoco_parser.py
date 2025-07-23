@@ -783,7 +783,11 @@ class MuJoCoParserClass(object):
         if img.sum() > 0:
             self.grab_image_backup = img
         if img.sum() == 0: # use backup instead
-            img = self.grab_image_backup
+            if hasattr(self, 'grab_image_backup'):
+                img = self.grab_image_backup
+            else:
+                # If no backup exists, return a blank image
+                pass
         return img.copy()
     
     def get_body_names(self,prefix='',excluding='world'):
