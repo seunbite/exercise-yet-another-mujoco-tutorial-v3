@@ -13,3 +13,6 @@ WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-an
 Sun Jul  6 17:04:03 2025
 WARNING: mju_openResource: unknown file '/home/iyy1112/workspace/exercise-yet-another-mujoco-tutorial-v3/notebook/main'
 
+Fri Aug  8 18:11:21 2025
+WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/exercise-yet-another-mujoco-tutorial-v3/adhoc/asset/makeup_frida/scene_table.xml'
+

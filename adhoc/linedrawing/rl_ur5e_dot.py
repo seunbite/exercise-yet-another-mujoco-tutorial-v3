@@ -560,7 +560,7 @@ def train_ur5e_sac(
     test_only=False,
     n_test_episodes=10,
     result_path=None,
-    do_render=False,
+    do_render=True,
     do_log=True,
     n_episode=4000,
     max_epi_sec=10.0,

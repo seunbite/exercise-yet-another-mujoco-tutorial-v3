@@ -62,12 +62,12 @@ def rpy2r(rpy_rad):
     roll  = rpy_rad[0]
     pitch = rpy_rad[1]
     yaw   = rpy_rad[2]
-    Cphi  = np.math.cos(roll)
-    Sphi  = np.math.sin(roll)
-    Cthe  = np.math.cos(pitch)
-    Sthe  = np.math.sin(pitch)
-    Cpsi  = np.math.cos(yaw)
-    Spsi  = np.math.sin(yaw)
+    Cphi  = np.cos(roll)
+    Sphi  = np.sin(roll)
+    Cthe  = np.cos(pitch)
+    Sthe  = np.sin(pitch)
+    Cpsi  = np.cos(yaw)
+    Spsi  = np.sin(yaw)
     R     = np.array([
         [Cpsi * Cthe, -Spsi * Cphi + Cpsi * Sthe * Sphi, Spsi * Sphi + Cpsi * Sthe * Cphi],
         [Spsi * Cthe, Cpsi * Cphi + Spsi * Sthe * Sphi, -Cpsi * Sphi + Spsi * Sthe * Cphi],
@@ -80,8 +80,8 @@ def rpy2r_order(r0, order=[0,1,2]):
     """ 
         roll,pitch,yaw in radian to R with ordering
     """
-    c1 = np.math.cos(r0[0]); c2 = np.math.cos(r0[1]); c3 = np.math.cos(r0[2])
-    s1 = np.math.sin(r0[0]); s2 = np.math.sin(r0[1]); s3 = np.math.sin(r0[2])
+    c1 = np.cos(r0[0]); c2 = np.cos(r0[1]); c3 = np.cos(r0[2])
+    s1 = np.sin(r0[0]); s2 = np.sin(r0[1]); s3 = np.sin(r0[2])
     a1 = np.array([[1,0,0],[0,c1,-s1],[0,s1,c1]])
     a2 = np.array([[c2,0,s2],[0,1,0],[-s2,0,c2]])
     a3 = np.array([[c3,-s3,0],[s3,c3,0],[0,0,1]])
@@ -121,7 +121,7 @@ def r2w(R):
     elif R[0,0] > 0 and R[1,1] > 0 and R[2,2] > 0:
         w = np.array([[0, 0, 0]]).T
     else:
-        w = np.math.pi/2 * np.array([[R[0,0]+1], [R[1,1]+1], [R[2,2]+1]])
+        w = np.pi/2 * np.array([[R[0,0]+1], [R[1,1]+1], [R[2,2]+1]])
     return w.flatten()
 
 def r2quat(R):

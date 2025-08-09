@@ -9,10 +9,9 @@ from scipy.ndimage import gaussian_filter1d
 from shapely import Polygon,LineString,Point # handle polygons
 
 """
-sys.path.append('../../package/helper/')
- => this should be called before calling 'from mujoco_parser import MuJoCoParserClass' 
+Package imports for utility
 """
-from transformation import (
+from .transformation import (
     t2p,
 )
 

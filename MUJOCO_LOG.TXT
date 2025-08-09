@@ -1,0 +1,15 @@
+Fri Aug  8 18:03:34 2025
+WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/asset/makeup_frida/scene_table.xml'
+
+Fri Aug  8 18:03:52 2025
+WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/asset/makeup_frida/scene_table.xml'
+
+Fri Aug  8 18:05:29 2025
+WARNING: mju_openResource: unknown file '../asset/makeup_frida/scene_table.xml'
+
+Fri Aug  8 18:10:44 2025
+WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/asset/makeup_frida/scene_table.xml'
+
+Fri Aug  8 18:11:08 2025
+WARNING: mju_openResource: unknown file '/Users/sb/Downloads/workspace/asset/makeup_frida/scene_table.xml'
+
