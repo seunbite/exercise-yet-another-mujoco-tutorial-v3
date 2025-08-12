@@ -145,7 +145,6 @@ class FaceLandmarkDetector:
             'right_eyebrow': self.mp.solutions.face_mesh.FACEMESH_RIGHT_EYEBROW,
             'lips': self.mp.solutions.face_mesh.FACEMESH_LIPS,
             'face_oval': self.mp.solutions.face_mesh.FACEMESH_FACE_OVAL,
-            'face_contour': self.mp.solutions.face_mesh.FACEMESH_CONTOURS
         }
         
         # Extract feature points using the predefined areas
@@ -250,6 +249,8 @@ class FaceLandmarkDetector:
         y_min, y_max = min(y_coords), max(y_coords)
         
         return [x_min, y_min, x_max - x_min, y_max - y_min]
+    
+
 
     def save_landmark_visualization(self, image: np.ndarray, face_data: Dict[str, Any], output_path: str):
         """Save image with landmark visualization"""
@@ -337,11 +338,89 @@ class FaceDrawingRobot:
         self.ik_env.reset()
         
         # Drawing parameters
-        self.dot_n = 10  # Number of interpolation points between two positions
+        self.dot_n = 5  # Number of interpolation points between two positions
         self.lift_height = 0.02  # Height to lift pen between strokes
+    
+    def _sort_points_by_proximity(self, points: List[List[float]]) -> List[List[float]]:
+        """
+        점들을 인접한 순서로 정렬합니다 (Nearest Neighbor 알고리즘 사용)
+        
+        Args:
+            points: 3D 점들의 리스트 [[x, y, z], ...]
+            
+        Returns:
+            정렬된 점들의 리스트
+        """
+        if len(points) <= 2:
+            return points
+        
+        points = np.array(points)
+        sorted_points = []
+        remaining_points = points.copy()
+        
+        # 시작점: 첫 번째 점
+        current_point = remaining_points[0]
+        sorted_points.append(current_point.tolist())
+        remaining_points = np.delete(remaining_points, 0, axis=0)
+        
+        # Nearest Neighbor로 다음 점 찾기
+        while len(remaining_points) > 0:
+            # 현재 점에서 가장 가까운 점 찾기
+            distances = np.linalg.norm(remaining_points - current_point, axis=1)
+            nearest_idx = np.argmin(distances)
+            
+            # 가장 가까운 점을 다음 점으로 선택
+            next_point = remaining_points[nearest_idx]
+            sorted_points.append(next_point.tolist())
+            
+            # 현재 점 업데이트 및 사용된 점 제거
+            current_point = next_point
+            remaining_points = np.delete(remaining_points, nearest_idx, axis=0)
+        
+        return sorted_points
+    
+    def _sort_contour_points_clockwise(self, points: List[List[float]]) -> List[List[float]]:
+        """
+        윤곽선 점들을 시계방향으로 정렬합니다
+        
+        Args:
+            points: 2D 또는 3D 점들의 리스트
+            
+        Returns:
+            시계방향으로 정렬된 점들의 리스트
+        """
+        if len(points) <= 2:
+            return points
+        
+        points = np.array(points)
+        
+        # 2D 점들로 변환 (z 좌표가 있다면 무시)
+        if points.shape[1] == 3:
+            points_2d = points[:, :2]
+        else:
+            points_2d = points
+        
+        # 중심점 계산
+        center = np.mean(points_2d, axis=0)
+        
+        # 각 점의 중심점으로부터의 각도 계산 (시계방향: -π에서 π로)
+        angles = []
+        for point in points_2d:
+            dx = point[0] - center[0]
+            dy = point[1] - center[1]
+            # atan2는 -π에서 π 범위의 각도를 반환
+            # 시계방향으로 정렬하려면 -y, x 순서로 계산
+            angle = np.arctan2(-dy, dx)
+            angles.append(angle)
+        
+        # 각도에 따라 정렬 (시계방향)
+        sorted_indices = np.argsort(angles)
+        sorted_points = points[sorted_indices]
+        
+        return sorted_points.tolist()
 
     def draw_face(self, face_data: Dict[str, Any], rotation: Tuple[float, float, float] = (0, 90, 0), scale: float = 1.0, position: Tuple[float, float, float] = (0.8, 0, 0.53)) -> bool:
-        """얼굴을 그립니다. 이동 '계획'과 '실행'을 분리하여 최적화합니다."""
+        """얼굴을 그립니다. 각 특징점을 순차적으로 그리고, 한 특징점이 완료되면 다음으로 넘어갑니다."""
         if not face_data or 'feature_points' not in face_data:
             print("Error: Invalid face data structure")
             return False
@@ -350,35 +429,125 @@ class FaceDrawingRobot:
         print(f"\nTransforming face data with rotation {rotation}° and scale {scale} (position: {position})...")
         self.face_data_in_simul = self.face_data_to_target(face_data, rotation=rotation, scale=scale, position=position)
         
+        total_points = sum(len(points) for points in self.face_data_in_simul['feature_points'].values() if points)
+        completed_points = 0
+        
         for feature_name, points in self.face_data_in_simul['feature_points'].items():
-            print(f"Drawing {feature_name}...")
+            if not points:
+                continue
+                
+            print(f"\n--- Drawing {feature_name} ({len(points)} points) ---")
+            
+            # 현재 특징점의 모든 점들을 순차적으로 그리기
+            feature_success = self._draw_feature_contour(feature_name, points)
+            
+            if feature_success:
+                completed_points += len(points)
+                print(f"✓ {feature_name} completed ({completed_points}/{total_points} points)")
+                
+            else:
+                print(f"✗ {feature_name} failed")
+        
+        return completed_points > 0
+    
+    def _draw_feature_contour(self, feature_name: str, points: List[List[float]]) -> bool:
+        if not points:
+            return False
+        
+        print(f"  Drawing {len(points)} points for {feature_name}...")
+        
+        successful_points = 0
+        
+        # 각 점을 순차적으로 그리기
+        for i, point in enumerate(points):
             current_point = self.ik_env.env.get_p_body(body_name='applicator_tip')
-            for point in points:
-                joint_configs = self._plan_ik_movement(current_point, np.array(point), dot_n=self.dot_n)
-                for joint_config in joint_configs:
+            intermediate_points = self._plan_movement(current_point, np.array(point), dot_n=self.dot_n)
+            point_success = False
+
+            # 중간점들을 따라 이동
+            for j, intermediate_point in enumerate(intermediate_points):
+                joint_config = self.ik_env.solve_ik_for_point(intermediate_point)
+                
+                if joint_config is not None:
+                    # 조인트 설정 및 시뮬레이션 업데이트
+                    joint_idxs = self.ik_env.env.get_idxs_fwd(joint_names=self.ik_env.joint_names)
                     self.ik_env.env.set_qpos_joints(self.ik_env.joint_names, joint_config)
+                    self.ik_env.env.forward()
+                    
                     self.ik_env.env.render()
+                    self._add_target_visualization(point, color="green", size=0.005)
+                    self._add_target_visualization(intermediate_points, color="blue", size=0.005)
                     self._add_target_visualization(points, color="black", size=0.005)
+                    
+                else:
+                    print(f"    Warning: IK failed for intermediate point {j+1}/{len(intermediate_points)}")
+                    continue
+            
+            # 마지막 중간점에 도달한 후, 목표 지점에 충분히 가까워질 때까지 IK 반복
+            if len(intermediate_points) > 0:
+                max_ik_attempts = 50  # 최대 IK 시도 횟수
+                ik_attempts = 0
+                
+                while ik_attempts < max_ik_attempts:
+                    current_tip_pos = self.ik_env.env.get_p_body(body_name='applicator_tip')
+                    distance_to_target = np.linalg.norm(current_tip_pos - np.array(point))
+                    
+                    if distance_to_target < 0.01:  # 1mm 이내에 도달
+                        point_success = True
+                        successful_points += 1
+                        print(f"    ✓ Completed point {i+1}/{len(points)} (distance: {distance_to_target:.4f}m, IK attempts: {ik_attempts})")
+                        break
+                    
+                    # 목표 지점으로 IK 해결
+                    joint_config = self.ik_env.solve_ik_for_point(np.array(point))
+                    
+                    if joint_config is not None:
+                        # 조인트 설정 및 시뮬레이션 업데이트
+                        joint_idxs = self.ik_env.env.get_idxs_fwd(joint_names=self.ik_env.joint_names)
+                        self.ik_env.env.set_qpos_joints(self.ik_env.joint_names, joint_config)
+                        self.ik_env.env.forward()
+                        
+                        # 시각화 업데이트
+                        self.ik_env.env.render()
+                        self._add_target_visualization(point, color="green", size=0.005)
+                        self._add_target_visualization(intermediate_points, color="blue", size=0.005)
+                        self._add_target_visualization(points, color="black", size=0.005)
+                        
+                        ik_attempts += 1
+                    else:
+                        print(f"    Warning: IK failed for final positioning of point {i+1}/{len(points)}")
+                        break
+                
+                if not point_success:
+                    print(f"    ✗ Point {i+1}/{len(points)} not reached after {ik_attempts} IK attempts (final distance: {distance_to_target:.4f}m)")
+            else:
+                print(f"    ✗ No intermediate points generated for point {i+1}/{len(points)}")
+        
+        print(f"  {feature_name}: {successful_points}/{len(points)} points drawn successfully")
+        return successful_points > 0
+    
 
-        return True
-
-    def _plan_ik_movement(self, start_point: np.ndarray, end_point: np.ndarray, dot_n: int = 10) -> List[np.ndarray]:
-        joint_configs = []
+    def _plan_movement(self, start_point: np.ndarray, end_point: np.ndarray, dot_n: int = 5) -> List[np.ndarray]:
+        """두 지점 사이의 중간점들을 생성합니다."""
+        intermediate_points = []
+        
+        # 시작점과 끝점이 너무 가까우면 중간점을 줄임
+        distance = np.linalg.norm(end_point - start_point)
+        if distance < 0.01:  # 1cm 이하면 중간점 없이
+            return [start_point, end_point]
+        
         for i in range(dot_n + 1):
             t = i / dot_n
-            try:
-                interp_point = start_point * (1.0 - t) + end_point * t
-            except Exception as e:
-                import pdb ; pdb.set_trace()
+            # 부드러운 보간을 위해 ease-in-out 적용
+            if t <= 0.5:
+                t_smooth = 2 * t * t
+            else:
+                t_smooth = 1 - 2 * (1 - t) * (1 - t)
             
-            # IK 해결
-            joint_config = self.ik_env.solve_ik_for_point(interp_point)
-            if joint_config is None:
-                return [] # 계획 실패 시 빈 리스트 반환
-            
-            joint_configs.append(joint_config)
-            
-        return joint_configs
+            interp_point = start_point * (1.0 - t_smooth) + end_point * t_smooth
+            intermediate_points.append(interp_point)
+        
+        return intermediate_points
 
 
     def _add_target_visualization(self, target_point: np.ndarray | List[np.ndarray], color: str = "red", size: float = 0.01):
@@ -391,12 +560,11 @@ class FaceDrawingRobot:
         elif color == "black":
             color_rgba = [0, 0, 0, 1]
             
-        if isinstance(target_point, np.ndarray) and target_point.shape == (3,):
-            target_points = [target_point]
-        elif isinstance(target_point, list) and all(len(p) == 3 for p in target_point):
-            target_points = target_point
-        else:
-            assert False, "target_point must be a numpy array or a list of numpy arrays"
+        target_points = np.array(target_point)
+        if target_points.shape == (3,):
+            target_points = [target_points]
+        elif target_points.shape == (2, 3):
+            target_points = target_points
             
         for point in target_points:
             self.ik_env.env.plot_sphere(p=point, r=size, rgba=color_rgba)
@@ -407,6 +575,16 @@ class FaceDrawingRobot:
         if not isinstance(rotation, (list, tuple, np.ndarray)) or len(rotation) < 3:
             assert False, "rotation must be a list, tuple, or numpy array with at least 3 elements"
 
+        # sort
+        new_feature_points = {}
+        for feature_name, points in face_data['feature_points'].items():
+            if feature_name in ['face_contour', 'face_oval']:
+                points = self._sort_contour_points_clockwise(points)
+            else:
+                points = self._sort_points_by_proximity(points)
+            new_feature_points[feature_name] = points
+
+        # transform
         scale_matrix = np.array([
             [scale, 0, 0],
             [0, scale, 0],
@@ -415,35 +593,22 @@ class FaceDrawingRobot:
         
         rotation_matrix = rpy2r(np.radians(rotation))
         
-        # Calculate face center in image coordinates
         x, y, width, height = face_data['face_bbox']
         face_center = np.array([x + width/2, y + height/2, 0])
         
-        # transform!
-        new_feature_points = {}
-        for feature_name, points in face_data['feature_points'].items():
+        for feature_name, points in new_feature_points.items():
             if not points:
                 continue
                 
-            # Convert to numpy array and add z-coordinate
             points_array = np.array(points)
             if points_array.shape[1] == 2:
                 points_array = np.hstack([points_array, np.zeros((len(points_array), 1))])
             
-            # 1. Center the face around origin (subtract face center)
             centered_points = points_array - face_center
-            
-            # 2. Apply scaling
             scaled_points = centered_points @ scale_matrix.T
-            
-            # 3. Apply rotation
             rotated_points = scaled_points @ rotation_matrix.T
-            
-            # 4. Move to target position
             final_points = rotated_points + np.array(position)
-            
             new_feature_points[feature_name] = final_points.tolist()
-            
         
         transformed_face_data = {
             'feature_points': new_feature_points,

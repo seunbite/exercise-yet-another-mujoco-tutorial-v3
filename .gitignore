@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+*.gif
 tmp/*
 face_detection_yunet_2023mar.onnx
 *.py[cod]
