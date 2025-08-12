@@ -1,0 +1,23 @@
+# Requirements for Face Drawing Robot system
+
+# Core dependencies
+numpy>=1.21.0
+opencv-python>=4.5.0
+Pillow>=8.0.0
+requests>=2.25.0
+
+# Face detection and landmark estimation
+mediapipe>=0.8.0  # Preferred method for face landmarks and detection
+# Alternative: opencv-contrib-python for additional face detection models
+
+# MuJoCo and robotics (already in main requirements)
+# mujoco>=3.0.0
+# mujoco-python-viewer>=0.1.0
+
+# Optional: For better face detection
+# dlib>=19.22.0  # Alternative face landmark detection
+# face-recognition>=1.3.0  # High-level face recognition API
+
+# Development and testing
+# pytest>=6.0.0
+# pytest-cov>=2.10.0 
