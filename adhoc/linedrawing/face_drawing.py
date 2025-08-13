@@ -640,7 +640,7 @@ def main(
         print("Failed to download image. Exiting.")
         return
     
-    original_image_path = os.path.join(tmp_folder, f"original_image_{timestamp}.png")
+    original_image_path = os.path.join(tmp_folder, f"original_image.png")
     cv2.imwrite(original_image_path, image)
     print(f"✓ Original image saved to: {original_image_path}")
     
@@ -657,7 +657,7 @@ def main(
         if points:
             print(f"  {feature_name}: {len(points)} points")
     
-    landmark_vis_path = os.path.join(tmp_folder, f"landmark_visualization_{timestamp}.png")
+    landmark_vis_path = os.path.join(tmp_folder, f"landmark_visualization.png")
     detector.save_landmark_visualization(image, face_data, landmark_vis_path)
     
     # 3. Robot drawing
