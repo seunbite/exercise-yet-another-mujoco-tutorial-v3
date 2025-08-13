@@ -1,12 +1,12 @@
 import os,mujoco,time,cv2,copy,glfw
 import numpy as np
-from mujoco_custom_viewer import MujocoMinimalViewer
-from mujoco_python_viewer import MujocoPythonViewer
+from .mujoco_custom_viewer import MujocoMinimalViewer
+from .mujoco_python_viewer import MujocoPythonViewer
 """
 sys.path.append('../../package/helper/')
  => this should be called before calling 'from mujoco_parser import MuJoCoParserClass' 
 """
-from transformation import (
+from ..helper.transformation import (
     t2p,
     t2r,
     rpy2r,
@@ -15,7 +15,7 @@ from transformation import (
     r2w,
     get_rotation_matrix_from_two_points,
 )
-from utility import (
+from ..helper.utility import (
     compute_view_params,
     meters2xyz,
     get_idxs,
@@ -24,7 +24,7 @@ from utility import (
     d2r,
     interpolate_and_smooth_nd,
 )
-from slider import MultiSliderClass
+from ..helper.slider import MultiSliderClass
 
 class MuJoCoParserClass(object):
     """
@@ -2594,6 +2594,9 @@ class MuJoCoParserClass(object):
             print ("[get_ik_ingredients] body_name:[%s] geom_name:[%s] are both not None!"%(body_name,geom_name))
         if (IK_P and IK_R):
             p_err = (p_trgt-p_curr)
+            # Ensure rotation matrices are float64
+            R_curr = np.array(R_curr, dtype=np.float64)
+            R_trgt = np.array(R_trgt, dtype=np.float64)
             R_err = np.linalg.solve(R_curr,R_trgt)
             w_err = R_curr @ r2w(R_err)
             J     = J_full
@@ -2603,6 +2606,9 @@ class MuJoCoParserClass(object):
             J     = J_p
             err   = p_err
         elif (not IK_P and IK_R):
+            # Ensure rotation matrices are float64
+            R_curr = np.array(R_curr, dtype=np.float64)
+            R_trgt = np.array(R_trgt, dtype=np.float64)
             R_err = np.linalg.solve(R_curr,R_trgt)
             w_err = R_curr @ r2w(R_err)
             J     = J_R
@@ -2647,10 +2653,11 @@ class MuJoCoParserClass(object):
         dq = self.damped_ls(J,err,stepsize=stepsize,eps=eps,th=th)
         if joint_idxs is None:
             joint_idxs = self.rev_joint_idxs
-        q = self.get_q(joint_idxs=joint_idxs)
-        q = q + dq[joint_idxs]
-        # FK
-        self.forward(q=q,joint_idxs=joint_idxs)
+        q = self.get_qpos()
+        # Only update the specific joint indices
+        q[joint_idxs] = q[joint_idxs] + dq[:len(joint_idxs)]
+        # FK - only pass the updated joint positions
+        self.forward(q=q[joint_idxs], joint_idxs=joint_idxs)
         return q, err
     
     def is_key_pressed(self,char=None,chars=None,upper=True):
